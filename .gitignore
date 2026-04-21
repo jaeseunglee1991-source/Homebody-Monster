@@ -1,0 +1,57 @@
+[Library]/
+[Temp]/
+[Obj]/
+[Build]/
+[Builds]/
+[Logs]/
+[MemoryCaptures]/
+
+# AssetMeta Checksums
+Assets/AddressableAssetsData/*/*.bin*
+Assets/StreamingAssets/aa.meta
+Assets/StreamingAssets/aa/*
+
+# Never ignore Asset meta files
+!*.meta
+
+# Ignore Personal Settings
+.plastic/
+UserSettings/
+
+# Ignore Documentation
+[Dd]ocumentation~
+
+# Ignore Crashlytics
+crashlytics_build_config.json
+
+# Ignore Visual Studio
+.vs/
+*.csproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.v12.suo
+*.v12.user
+*.v13.suo
+*.v13.user
+*.v14.suo
+*.v14.user
+
+# Ignore Visual Studio Code
+.vscode/
+
+# Ignore Rider
+.idea/
+*.sln.iml
+
+# Ignore Apple
+.DS_Store
+
+# Ignore Android
+*.apk
+*.aab
+*.unitypackage
+
+# Ignore Crashlytics
+crashlytics_build_config.json
