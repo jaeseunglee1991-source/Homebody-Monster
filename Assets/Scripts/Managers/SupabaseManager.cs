@@ -4,37 +4,32 @@ using System.Threading.Tasks;
 using Newtonsoft.Json;
 using System.Collections.Generic;
 
-// --- 데이터 모델 (DB 테이블과 1:1 매칭) ---
+// ════════════════════════════════════════════════════════════
+//  데이터 모델 (UserProfile)
+// ════════════════════════════════════════════════════════════
 [System.Serializable]
 public class UserProfile
 {
-    [JsonProperty("id")] public string Id { get; set; }
-    [JsonProperty("nickname")] public string Nickname { get; set; }
-    [JsonProperty("win_count")] public int WinCount { get; set; }
-    [JsonProperty("lose_count")] public int LoseCount { get; set; }
+    [JsonProperty("id")]         public string Id        { get; set; }
+    [JsonProperty("nickname")]   public string Nickname  { get; set; }
+    [JsonProperty("win_count")]  public int    WinCount  { get; set; }
+    [JsonProperty("lose_count")] public int    LoseCount { get; set; }
 }
 
-[System.Serializable]
-public class MatchEntry
-{
-    [JsonProperty("player_id")] public string PlayerId { get; set; }
-    [JsonProperty("is_winner")] public bool IsWinner { get; set; }
-    [JsonProperty("rank")] public int Rank { get; set; }
-    [JsonProperty("kill_count")] public int KillCount { get; set; }
-    [JsonProperty("survived_time")] public float SurvivedTime { get; set; }
-}
-
+/// <summary>
+/// 보안이 강화된 Supabase 매니저.
+/// 직접적인 테이블 INSERT 대신 RPC(서버 함수)를 사용합니다.
+/// </summary>
 public class SupabaseManager : MonoBehaviour
 {
     public static SupabaseManager Instance { get; private set; }
 
-    [Header("Supabase Security Credentials")]
-    // 사용자님이 제공해주신 실제 접속 정보 적용
-    public string supabaseUrl = "https://khvimlswbbmxcxpjkkes.supabase.co"; 
-    public string supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtodmltbHN3YmJteGN4cGpra2VzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3Nzk4NzQsImV4cCI6MjA5MjM1NTg3NH0.Y6cAJKph0YMKCIsibNwJiN3t5IFm39iSQzWalbK5zPE";
+    [Header("⚠️ Supabase 접속 정보 — Inspector에서 입력")]
+    public string supabaseUrl;
+    public string supabaseAnonKey;
 
-    public Client Client { get; private set; }
-    public bool IsInitialized { get; private set; }
+    public Client Client      { get; private set; }
+    public bool   IsInitialized { get; private set; }
 
     async void Awake()
     {
@@ -42,6 +37,7 @@ public class SupabaseManager : MonoBehaviour
         {
             Instance = this;
             DontDestroyOnLoad(gameObject);
+            EnsureMainThreadDispatcher(); 
             await InitSupabase();
         }
         else
@@ -50,82 +46,121 @@ public class SupabaseManager : MonoBehaviour
         }
     }
 
-    private async Task InitSupabase()
+    private void EnsureMainThreadDispatcher()
     {
-        try
+        if (FindObjectOfType<MainThreadDispatcher>() == null)
         {
-            // SDK 내부 호환성을 위해 /rest/v1/ 등이 붙어있다면 제거된 루트 URL 사용 권장
-            var options = new SupabaseOptions { AutoConnectRealtime = true };
-            Client = new Client(supabaseUrl, supabaseKey, options);
-            
-            // 안정적인 초기화 메커니즘
-            await Client.InitializeAsync();
-            
-            IsInitialized = true;
-            Debug.Log("✅ Supabase 보안 연결 및 초기화 완료!");
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"❌ Supabase 연결 실패: {e.Message}");
+            var go = new GameObject("[MainThreadDispatcher]");
+            go.AddComponent<MainThreadDispatcher>();
+            DontDestroyOnLoad(go);
         }
     }
 
-    // --- 출시용 핵심 서버 로직 ---
+    private async Task InitSupabase()
+    {
+        if (string.IsNullOrEmpty(supabaseUrl) || string.IsNullOrEmpty(supabaseAnonKey))
+        {
+            Debug.LogError("❌ SupabaseManager: URL 또는 Key가 설정되지 않았습니다. Inspector를 확인하세요.");
+            return;
+        }
 
-    /// <summary>
-    /// 유저 프로필 정보를 가져오거나, 없으면 자동 생성합니다. (SQL 트리거와 연동)
-    /// </summary>
+        try
+        {
+            var options = new SupabaseOptions { AutoConnectRealtime = true };
+            Client = new Client(supabaseUrl, supabaseAnonKey, options);
+            await Client.InitializeAsync();
+            IsInitialized = true;
+            Debug.Log("✅ Supabase 초기화 완료");
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"❌ Supabase 초기화 실패: {e.Message}");
+        }
+    }
+
+    // ════════════════════════════════════════════════════════
+    //  프로필 조회
+    // ════════════════════════════════════════════════════════
     public async Task<UserProfile> GetOrCreateProfile(string userId)
     {
         if (!IsInitialized) return null;
 
         try
         {
-            var response = await Client.From<UserProfile>().Where(x => x.Id == userId).Get();
-            
-            if (response.Models.Count > 0)
-            {
-                return response.Models[0];
-            }
-            else
-            {
-                // SQL 트리거가 프로필을 생성할 시간을 위해 잠깐 대기 후 재시도
-                await Task.Delay(1000);
-                response = await Client.From<UserProfile>().Where(x => x.Id == userId).Get();
-                return response.Models.Count > 0 ? response.Models[0] : null;
-            }
+            var response = await Client
+                .From<UserProfile>("profiles")
+                .Filter("id", Supabase.Postgrest.Constants.Operator.Equals, userId)
+                .Single();
+
+            return response;
         }
-        catch (System.Exception e)
+        catch
         {
-            Debug.LogError($"⚠️ 프로필 로드 중 오류: {e.Message}");
-            return null;
+            await Task.Delay(500); // 트리거 대기
+            try
+            {
+                return await Client
+                    .From<UserProfile>("profiles")
+                    .Filter("id", Supabase.Postgrest.Constants.Operator.Equals, userId)
+                    .Single();
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"⚠️ 프로필 로드 실패: {e.Message}");
+                return null;
+            }
         }
     }
 
-    /// <summary>
-    /// 게임 결과를 DB에 저장합니다. (RLS 보안 적용됨)
-    /// </summary>
-    public async Task SaveMatchResult(bool isWinner, int rank, int kills, float time)
+    // ════════════════════════════════════════════════════════
+    //  게임 결과 저장 (RPC 사용 — 보안성 향상)
+    // ════════════════════════════════════════════════════════
+    public async Task SaveMatchResult(bool isWinner, int rank, int kills, float survivedTime)
     {
         if (!IsInitialized || Client.Auth.CurrentUser == null) return;
 
-        var entry = new MatchEntry
+        string roomId = GameManager.Instance?.currentRoomId ?? "unknown";
+
+        var parameters = new Dictionary<string, object>
         {
-            PlayerId = Client.Auth.CurrentUser.Id,
-            IsWinner = isWinner,
-            Rank = rank,
-            KillCount = kills,
-            SurvivedTime = time
+            { "p_room_id",       roomId     },
+            { "p_is_winner",     isWinner   },
+            { "p_rank",          rank       },
+            { "p_kill_count",    kills      },
+            { "p_survived_time", survivedTime }
         };
 
         try
         {
-            await Client.From<MatchEntry>().Insert(entry);
-            Debug.Log("🏆 게임 결과가 성공적으로 서버에 기록되었습니다.");
+            // 직접 INSERT 대신 서버 측의 save_match_result 함수를 호출
+            await Client.Rpc("save_match_result", parameters);
+            Debug.Log("🏆 게임 결과 서버 저장 완료 (RPC)");
         }
         catch (System.Exception e)
         {
             Debug.LogError($"⚠️ 결과 저장 실패: {e.Message}");
         }
+    }
+
+    // ════════════════════════════════════════════════════════
+    //  닉네임 중복 확인 (RPC 사용)
+    // ════════════════════════════════════════════════════════
+    public async Task<bool> IsNicknameAvailable(string nickname)
+    {
+        if (!IsInitialized) return false;
+
+        try
+        {
+            var result = await Client.Rpc("check_nickname_available",
+                new Dictionary<string, object> { { "p_nickname", nickname } });
+
+            if (result?.Content != null)
+                return bool.TryParse(result.Content.Trim('"'), out bool available) && available;
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"⚠️ 닉네임 확인 실패: {e.Message}");
+        }
+        return false;
     }
 }
