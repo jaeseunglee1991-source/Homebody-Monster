@@ -1,13 +1,25 @@
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
+[System.Serializable]
+public struct MatchResult
+{
+    public bool isWinner;
+    public int rank;
+    public int killCount;
+    public float survivedTime;
+}
+
 public class GameManager : MonoBehaviour
 {
     public static GameManager Instance { get; private set; }
 
     [Header("Player Data")]
     public string currentPlayerId;
-    public CharacterData myCharacterData; // 이전에 구성한 로우스탯 기반 데이터
+    public CharacterData myCharacterData; 
+
+    [Header("Match Result (인게임 → 결과씬 데이터 전달)")]
+    public MatchResult lastMatchResult;
 
     private void Awake()
     {
@@ -31,11 +43,12 @@ public class GameManager : MonoBehaviour
     // 결과 씬에서 로비로 돌아갈 때 데이터 초기화
     public void ResetForNewMatch()
     {
-        // 체력 등 일회성 전투 데이터 초기화 로직
         if (myCharacterData != null)
         {
             myCharacterData.currentHp = myCharacterData.maxHp;
         }
+        
+        lastMatchResult = default;
         LoadScene("LobbyScene");
     }
 }

@@ -1,57 +1,100 @@
 using UnityEngine;
 
+/// <summary>
+/// 전투 연산을 담당합니다 (서버 권장 로직).
+/// 모든 스킬 효과가 여기서 계산됩니다.
+/// </summary>
 public class CombatSystem : MonoBehaviour
 {
-    // 공격자(Attacker)가 방어자(Defender)를 타격했을 때 호출 (서버 전용 로직으로 사용 권장)
+    /// <summary>
+    /// 공격자가 방어자를 타격했을 때 최종 데미지를 계산합니다.
+    /// </summary>
     public static DamageResult CalculateDamage(CharacterData attacker, CharacterData defender)
     {
         DamageResult result = new DamageResult();
-        float finalDamage = attacker.baseAtk;
+        float damage = attacker.baseAtk;
 
-        // 1. 스킬 판정: 방어자의 회피 (Ninja 스킬)
-        if (defender.skills.Contains(SkillType.Ninja) && Random.value < 0.3f)
+        // ── 1. 회피 판정 (Ninja 스킬) ─────────────────────────
+        if (defender.skills.Contains(SkillType.Ninja))
         {
-            result.isEvaded = true;
-            result.finalDamage = 0f;
-            return result;
+            float evadeChance = 0.30f;
+            if (Random.value < evadeChance)
+            {
+                result.isEvaded = true;
+                result.finalDamage = 0f;
+                return result;
+            }
         }
 
-        // 2. 상성 판정 (가위바위보 식 꼬리물기)
-        bool isAdvantage = CheckAffinityAdvantage(attacker.affinity, defender.affinity);
-        if (isAdvantage)
+        // ── 2. Shield 스킬: 방어자의 피해 감소 ───────────────
+        float shieldReduction = 0f;
+        if (defender.skills.Contains(SkillType.Shield))
         {
-            finalDamage *= 1.5f; // 상성 우위 시 50% 추가 피해
+            shieldReduction = damage * 0.25f; // 25% 피해 감소
+            result.isShielded = true;
+        }
+
+        // ── 3. 상성 판정 ─────────────────────────────────────
+        bool advantageous = CheckAffinityAdvantage(attacker.affinity, defender.affinity);
+        if (advantageous)
+        {
+            damage *= 1.5f;
             result.isCritical = true;
         }
 
-        // 3. 특수 상성 (세계관 붕괴 기믹)
-        if (IsSpecialAffinity(attacker.affinity) && IsSpecialAffinity(defender.affinity) && attacker.affinity != defender.affinity)
+        // ── 4. 특수 상성 (세계관 붕괴 기믹) ─────────────────
+        if (IsSpecialAffinity(attacker.affinity) && IsSpecialAffinity(defender.affinity)
+            && attacker.affinity != defender.affinity)
         {
-            finalDamage = 9999f; // 즉사급 데미지
+            damage = 9999f;
             result.isWorldCollapse = true;
         }
         else if (IsSpecialAffinity(attacker.affinity) && !IsSpecialAffinity(defender.affinity))
         {
-            finalDamage *= 1.2f; // 특수 상성이 일반 상성 타격 시 약간의 보너스
+            damage *= 1.2f;
         }
 
-        // 4. 스킬 판정: 공격자의 체력 비례 데미지 증가 (Berserker)
-        if (attacker.skills.Contains(SkillType.Berserker) && attacker.currentHp <= attacker.maxHp * 0.5f)
+        // ── 5. Berserker: 저체력 시 데미지 증가 ──────────────
+        if (attacker.skills.Contains(SkillType.Berserker)
+            && attacker.currentHp <= attacker.maxHp * 0.5f)
         {
-            finalDamage *= 1.5f;
+            damage *= 1.5f;
         }
 
-        result.finalDamage = Mathf.Round(finalDamage * 10f) / 10f; // 0.5, 1.2 등 세밀한 데미지 적용
+        // ── 6. GiantKiller: 공격 대상 HP가 높을수록 데미지 증가
+        if (attacker.skills.Contains(SkillType.GiantKiller))
+        {
+            float hpDiff = defender.currentHp - attacker.currentHp;
+            if (hpDiff > 0f)
+            {
+                float bonus = Mathf.Clamp(hpDiff / defender.maxHp, 0f, 0.5f); 
+                damage *= 1f + bonus;
+                result.isGiantKill = true;
+            }
+        }
+
+        // ── 7. Guardian: 저체력 방어자 피해 감소 ─────────────
+        if (defender.skills.Contains(SkillType.Guardian)
+            && defender.currentHp <= defender.maxHp * 0.3f)
+        {
+            damage *= 0.6f; // 체력 30% 이하 시 40% 피해 감소
+            result.isGuarded = true;
+        }
+
+        damage -= shieldReduction;
+        damage = Mathf.Max(damage, 0f); 
+
+        result.finalDamage = Mathf.Round(damage * 10f) / 10f;
         return result;
     }
 
     private static bool CheckAffinityAdvantage(AffinityType attacker, AffinityType defender)
     {
-        if (attacker == AffinityType.Spicy && defender == AffinityType.Greasy) return true;
-        if (attacker == AffinityType.Greasy && defender == AffinityType.Fresh) return true;
-        if (attacker == AffinityType.Fresh && defender == AffinityType.Salty) return true;
-        if (attacker == AffinityType.Salty && defender == AffinityType.Sweet) return true;
-        if (attacker == AffinityType.Sweet && defender == AffinityType.Spicy) return true;
+        if (attacker == AffinityType.Spicy   && defender == AffinityType.Greasy) return true;
+        if (attacker == AffinityType.Greasy  && defender == AffinityType.Fresh)  return true;
+        if (attacker == AffinityType.Fresh   && defender == AffinityType.Salty)  return true;
+        if (attacker == AffinityType.Salty   && defender == AffinityType.Sweet)  return true;
+        if (attacker == AffinityType.Sweet   && defender == AffinityType.Spicy)  return true;
         return false;
     }
 
@@ -64,7 +107,10 @@ public class CombatSystem : MonoBehaviour
 public struct DamageResult
 {
     public float finalDamage;
-    public bool isEvaded;
-    public bool isCritical;
-    public bool isWorldCollapse;
+    public bool isEvaded;        
+    public bool isCritical;      
+    public bool isWorldCollapse; 
+    public bool isShielded;      
+    public bool isGiantKill;     
+    public bool isGuarded;       
 }
