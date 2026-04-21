@@ -18,8 +18,9 @@ public class GameManager : MonoBehaviour
     public string currentPlayerId;
     public CharacterData myCharacterData; 
 
-    [Header("Match Result (인게임 → 결과씬 데이터 전달)")]
-    public MatchResult lastMatchResult;
+    [Header("Match Info")]
+    public string currentRoomId;        // MatchmakingManager에서 배정된 방 ID
+    public MatchResult lastMatchResult; // InGameManager에서 저장, ResultController에서 사용
 
     private void Awake()
     {
@@ -34,13 +35,11 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    // 씬 전환 통합 메서드
     public void LoadScene(string sceneName)
     {
         SceneManager.LoadScene(sceneName);
     }
 
-    // 결과 씬에서 로비로 돌아갈 때 데이터 초기화
     public void ResetForNewMatch()
     {
         if (myCharacterData != null)
@@ -48,7 +47,8 @@ public class GameManager : MonoBehaviour
             myCharacterData.currentHp = myCharacterData.maxHp;
         }
         
-        lastMatchResult = default;
+        currentRoomId    = null;
+        lastMatchResult  = default;
         LoadScene("LobbyScene");
     }
 }
