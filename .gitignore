@@ -1,28 +1,33 @@
-[Library]/
-[Temp]/
-[Obj]/
-[Build]/
-[Builds]/
-[Logs]/
-[MemoryCaptures]/
+# Unity folders
+Homebody-Monster_unity/Library/
+Homebody-Monster_unity/Temp/
+Homebody-Monster_unity/Obj/
+Homebody-Monster_unity/Build/
+Homebody-Monster_unity/Builds/
+Homebody-Monster_unity/Logs/
+Homebody-Monster_unity/UserSettings/
+Homebody-Monster_unity/MemoryCaptures/
+
+# Claude / Tooling
+.claude/
 
 # AssetMeta Checksums
-Assets/AddressableAssetsData/*/*.bin*
-Assets/StreamingAssets/aa.meta
-Assets/StreamingAssets/aa/*
+Homebody-Monster_unity/Assets/AddressableAssetsData/*/*.bin*
+Homebody-Monster_unity/Assets/StreamingAssets/aa.meta
+Homebody-Monster_unity/Assets/StreamingAssets/aa/*
 
 # Never ignore Asset meta files
 !*.meta
 
 # Ignore Personal Settings
-.plastic/
-UserSettings/
+Homebody-Monster_unity/.plastic/
 
 # Ignore Documentation
-[Dd]ocumentation~
+Homebody-Monster_unity/Documentation~/
+Homebody-Monster_unity/documentation~/
 
 # Ignore Crashlytics
-crashlytics_build_config.json
+Homebody-Monster_unity/crashlytics_build_config.json
 
 # Ignore Visual Studio
 .vs/
@@ -52,6 +57,3 @@ crashlytics_build_config.json
 *.apk
 *.aab
 *.unitypackage
-
-# Ignore Crashlytics
-crashlytics_build_config.json
