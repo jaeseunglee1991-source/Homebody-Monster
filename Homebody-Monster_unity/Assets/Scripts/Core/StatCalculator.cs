@@ -4,21 +4,22 @@ public static class StatCalculator
 {
     public static float GetGradeMultiplier(GradeTier grade) => 1.0f + (int)grade * 0.111f;
 
-    private struct JobStat { public float HpBonus, AtkBonus, Speed; }
+    // 고정값(+) 대신 배율(×)로 직업별 스탯 보정 — 등급이 높아져도 비율이 일정하게 유지됨
+    private struct JobStat { public float HpMult, AtkMult, Speed; }
 
     private static readonly System.Collections.Generic.Dictionary<JobType, JobStat> JobBaseStats
         = new System.Collections.Generic.Dictionary<JobType, JobStat>
     {
-        { JobType.Warrior,   new JobStat { HpBonus =  5f, AtkBonus =  0.5f, Speed = 3.0f } },
-        { JobType.Tanker,    new JobStat { HpBonus = 15f, AtkBonus = -0.5f, Speed = 2.5f } },
-        { JobType.Paladin,   new JobStat { HpBonus =  3f, AtkBonus =  0.5f, Speed = 2.8f } },
-        { JobType.Berserker, new JobStat { HpBonus = -3f, AtkBonus =  1.5f, Speed = 3.2f } },
-        { JobType.Mage,      new JobStat { HpBonus = -5f, AtkBonus =  3.0f, Speed = 2.8f } },
-        { JobType.Archer,    new JobStat { HpBonus = -2f, AtkBonus =  1.0f, Speed = 3.3f } },
-        { JobType.Priest,    new JobStat { HpBonus =  0f, AtkBonus =  0.0f, Speed = 2.9f } },
-        { JobType.Rogue,     new JobStat { HpBonus = -3f, AtkBonus =  1.2f, Speed = 3.5f } },
-        { JobType.Assassin,  new JobStat { HpBonus = -2f, AtkBonus =  1.5f, Speed = 3.8f } },
-        { JobType.Chef,      new JobStat { HpBonus =  2f, AtkBonus =  0.3f, Speed = 3.0f } },
+        { JobType.Warrior,   new JobStat { HpMult = 1.1f, AtkMult = 1.1f, Speed = 3.0f } },
+        { JobType.Tanker,    new JobStat { HpMult = 1.4f, AtkMult = 0.8f, Speed = 2.5f } },
+        { JobType.Paladin,   new JobStat { HpMult = 1.1f, AtkMult = 1.0f, Speed = 2.8f } },
+        { JobType.Berserker, new JobStat { HpMult = 0.9f, AtkMult = 1.3f, Speed = 3.2f } },
+        { JobType.Mage,      new JobStat { HpMult = 0.8f, AtkMult = 1.5f, Speed = 2.8f } },
+        { JobType.Archer,    new JobStat { HpMult = 0.9f, AtkMult = 1.2f, Speed = 3.3f } },
+        { JobType.Priest,    new JobStat { HpMult = 1.0f, AtkMult = 1.0f, Speed = 2.9f } },
+        { JobType.Rogue,     new JobStat { HpMult = 0.9f, AtkMult = 1.3f, Speed = 3.5f } },
+        { JobType.Assassin,  new JobStat { HpMult = 0.8f, AtkMult = 1.4f, Speed = 3.8f } },
+        { JobType.Chef,      new JobStat { HpMult = 1.0f, AtkMult = 1.0f, Speed = 3.0f } },
     };
 
     public static CharacterData GenerateCharacter(string name, JobType? forceJob = null)
@@ -34,9 +35,10 @@ public static class StatCalculator
         float mult   = GetGradeMultiplier(data.grade);
         var stat = JobBaseStats[data.job];
 
-        data.maxHp     = Round1(rawHp  * mult + stat.HpBonus);
+        // 곱산 적용: rawStat × 등급배율 × 직업배율
+        data.maxHp     = Round1(rawHp  * mult * stat.HpMult);
         data.currentHp = data.maxHp;
-        data.baseAtk   = Round1(rawAtk * mult + stat.AtkBonus);
+        data.baseAtk   = Round1(rawAtk * mult * stat.AtkMult);
         data.moveSpeed = stat.Speed;
 
         RollSkills(data);

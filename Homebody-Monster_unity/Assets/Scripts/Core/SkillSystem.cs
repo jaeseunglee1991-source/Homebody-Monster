@@ -55,13 +55,13 @@ public static class SkillSystem
             { var t = GetClosestEnemy(caster, 1.8f); if (t != null) { DealSkillDamage(caster, t, caster.myData.baseAtk * 0.8f); t.StatusFX.ApplyEffect(StatusEffectType.Stun, 1f, 0f, caster); } yield break; }
             case ActiveSkillType.Shockwave:
             { var hits = Physics2D.RaycastAll(caster.transform.position, caster.GetFacingDirection(), 5f, caster.enemyLayer); foreach (var h in hits) { var t = h.collider.GetComponent<PlayerController>(); if (t != null && !t.IsDead && t != caster) { DealSkillDamage(caster, t, caster.myData.baseAtk * 1.0f); t.StatusFX.ApplyEffect(StatusEffectType.AtkReduction, 2f, 0.2f, caster); } } yield break; }
-            case ActiveSkillType.IronSkin: caster.StatusFX.ApplyEffect(StatusEffectType.ShieldHp, 4f, 15f); yield break;
+            case ActiveSkillType.IronSkin: caster.StatusFX.ApplyEffect(StatusEffectType.ShieldHp, 4f, caster.myData.maxHp * 0.2f); yield break; // 최대HP 20% 비례 콰싸드
             case ActiveSkillType.Bulldozer:
             { Vector2 dir = caster.GetFacingDirection(), orig = caster.Rb.position, dest = orig + dir * 6f; float el = 0f; var hit = new HashSet<PlayerController>();
               while (el < 0.4f) { el += Time.deltaTime; caster.Rb.MovePosition(Vector2.Lerp(orig, dest, el / 0.4f)); foreach (var c2 in Physics2D.OverlapCircleAll(caster.Rb.position, 1.2f, caster.enemyLayer)) { var t = c2.GetComponent<PlayerController>(); if (t != null && !t.IsDead && t != caster && !hit.Contains(t)) { hit.Add(t); DealSkillDamage(caster, t, caster.myData.baseAtk * 1.0f); caster.StartCoroutine(KnockbackRoutine(t, dir, 3f)); } } yield return null; } yield break; }
             // ── 팔라딘 ──
             case ActiveSkillType.HolyStrike:
-            { var t = GetClosestEnemy(caster, 2f); if (t != null) { DealSkillDamage(caster, t, caster.myData.baseAtk * 1.2f); caster.Heal(2f); } yield break; }
+            { var t = GetClosestEnemy(caster, 2f); if (t != null) { DealSkillDamage(caster, t, caster.myData.baseAtk * 1.2f); caster.Heal(caster.myData.maxHp * 0.05f); } yield break; } // 최대HP 5% 회복
             case ActiveSkillType.JudgmentHammer:
             { yield return new WaitForSeconds(0.3f); foreach (var t in GetEnemiesInRadius(caster, 1.2f, targetPos)) { DealSkillDamage(caster, t, caster.myData.baseAtk * 1.0f); t.StatusFX.ApplyEffect(StatusEffectType.Slow, 1.5f, 0.3f, caster); } yield break; }
             case ActiveSkillType.DivineGrace: caster.StatusFX.ApplyEffect(StatusEffectType.DivineGrace, 2f); yield break;
@@ -69,9 +69,9 @@ public static class SkillSystem
             { yield return new WaitForSeconds(0.6f); foreach (var t in GetEnemiesInRadius(caster, 1.5f, targetPos)) DealSkillDamage(caster, t, caster.myData.baseAtk * 3.0f); yield break; }
             // ── 버서커 ──
             case ActiveSkillType.RuthlessStrike:
-            { if (caster.myData.currentHp <= 1.5f) yield break; caster.myData.currentHp -= 1f; if (caster.IsLocalPlayer && InGameHUD.Instance != null) InGameHUD.Instance.UpdateHealthBar(caster.myData.currentHp, caster.myData.maxHp); var t = GetClosestEnemy(caster, 2f); if (t != null) DealSkillDamage(caster, t, caster.myData.baseAtk * 1.8f); yield break; }
+            { float cost = caster.myData.maxHp * 0.1f; if (caster.myData.currentHp <= cost) yield break; caster.myData.currentHp -= cost; if (caster.IsLocalPlayer && InGameHUD.Instance != null) InGameHUD.Instance.UpdateHealthBar(caster.myData.currentHp, caster.myData.maxHp); var t = GetClosestEnemy(caster, 2f); if (t != null) DealSkillDamage(caster, t, caster.myData.baseAtk * 2.0f); yield break; }
             case ActiveSkillType.BleedSlash:
-            { var t = GetClosestEnemy(caster, 2f); if (t != null) { DealSkillDamage(caster, t, caster.myData.baseAtk * 1.0f); t.StatusFX.ApplyEffect(StatusEffectType.Bleed, 3f, 1.5f, caster); } yield break; }
+            { var t = GetClosestEnemy(caster, 2f); if (t != null) { DealSkillDamage(caster, t, caster.myData.baseAtk * 1.0f); t.StatusFX.ApplyEffect(StatusEffectType.Bleed, 3f, caster.myData.baseAtk * 0.3f, caster); } yield break; } // 공격력 30% DoT
             case ActiveSkillType.UndyingRage: caster.StatusFX.ApplyEffect(StatusEffectType.UndyingRage, 4f); yield break;
             case ActiveSkillType.BladeStorm:
             { caster.StatusFX.ApplyEffect(StatusEffectType.BladeStormActive, 3f); float el = 0f, next = 0.5f;
@@ -82,8 +82,8 @@ public static class SkillSystem
             case ActiveSkillType.IceShards:
             { foreach (float ao in new[]{0f,-25f,25f}) { Vector2 d = Rotate(caster.GetFacingDirection(), ao); foreach (var h in Physics2D.RaycastAll(caster.transform.position, d, 6f, caster.enemyLayer)) { var t = h.collider.GetComponent<PlayerController>(); if (t != null && !t.IsDead && t != caster) { DealSkillDamage(caster, t, caster.myData.baseAtk * 0.8f); t.StatusFX.ApplyEffect(StatusEffectType.Root, 1.5f, 0f, caster); } } } yield break; }
             case ActiveSkillType.IceShield: caster.StatusFX.ApplyEffect(StatusEffectType.IceShield, 2.5f); yield break;
-            case ActiveSkillType.Meteor:
-            { yield return new WaitForSeconds(1f); foreach (var t in GetEnemiesInRadius(caster, 3.5f, targetPos)) DealSkillDamage(caster, t, caster.myData.baseAtk * 4.0f); yield break; }
+            case ActiveSkillType.Meteor: // 원타계수 4.0에서 2.5로 너프, 화상 디버프 연계
+            { yield return new WaitForSeconds(1f); foreach (var t in GetEnemiesInRadius(caster, 3.5f, targetPos)) { DealSkillDamage(caster, t, caster.myData.baseAtk * 2.5f); t.StatusFX.ApplyEffect(StatusEffectType.Burn, 3f, caster.myData.baseAtk * 0.5f, caster); } yield break; }
             // ── 궁수 ──
             case ActiveSkillType.PierceArrow:
             { yield return new WaitForSeconds(0.8f); foreach (var h in Physics2D.RaycastAll(caster.transform.position, caster.GetFacingDirection(), 10f, caster.enemyLayer)) { var t = h.collider.GetComponent<PlayerController>(); if (t != null && !t.IsDead && t != caster) DealSkillDamage(caster, t, caster.myData.baseAtk * 2.0f); } yield break; }
@@ -97,11 +97,11 @@ public static class SkillSystem
             { var t = GetClosestEnemy(caster, 6f); if (t != null) { DealSkillDamage(caster, t, caster.myData.baseAtk * 1.0f); t.StatusFX.ApplyEffect(StatusEffectType.Slow, 2f, 0.2f, caster); } yield break; }
             case ActiveSkillType.HolyExplosion:
             { foreach (var t in GetEnemiesInRadius(caster, 2.5f)) { DealSkillDamage(caster, t, caster.myData.baseAtk * 1.0f); caster.StartCoroutine(KnockbackRoutine(t, ((Vector2)t.transform.position - caster.Rb.position).normalized, 4f)); } yield break; }
-            case ActiveSkillType.HealingLight: caster.Heal(8f); yield break;
+            case ActiveSkillType.HealingLight: caster.Heal(caster.myData.maxHp * 0.25f); yield break; // 최대HP 25% 회복
             case ActiveSkillType.GuardianAngel: caster.StatusFX.ApplyEffect(StatusEffectType.GuardianAngel, 3f); yield break;
             // ── 도적 ──
             case ActiveSkillType.PoisonDagger:
-            { yield return new WaitForSeconds(0.2f); var t = GetClosestEnemy(caster, 5f); if (t != null) { DealSkillDamage(caster, t, caster.myData.baseAtk * 0.8f); t.StatusFX.ApplyEffect(StatusEffectType.Poison, 3f, 1.0f, caster); } yield break; }
+            { yield return new WaitForSeconds(0.2f); var t = GetClosestEnemy(caster, 5f); if (t != null) { DealSkillDamage(caster, t, caster.myData.baseAtk * 0.8f); t.StatusFX.ApplyEffect(StatusEffectType.Poison, 3f, caster.myData.baseAtk * 0.4f, caster); } yield break; } // 공격력 40% DoT
             case ActiveSkillType.Ambush:
             { var t = GetClosestEnemy(caster, 2f); if (t != null) { bool behind = IsBehind(caster, t); DealSkillDamage(caster, t, caster.myData.baseAtk * (behind ? 2.0f : 1.0f)); } yield break; }
             case ActiveSkillType.SmokeBomb: caster.StatusFX.ApplyEffect(StatusEffectType.Stealth, 3f); yield break;
@@ -120,7 +120,7 @@ public static class SkillSystem
             { var t = GetClosestEnemy(caster, 1.8f); if (t != null) { DealSkillDamage(caster, t, caster.myData.baseAtk * 1.0f); if (Random.value < 0.2f) t.StatusFX.ApplyEffect(StatusEffectType.Stun, 1f, 0f, caster); } yield break; }
             case ActiveSkillType.BurningOil:
             { float el = 0f; var applied = new HashSet<PlayerController>(); while (el < 3f) { el += Time.deltaTime; foreach (var t in GetEnemiesInRadius(caster, 2.0f, targetPos)) if (!applied.Contains(t)) { applied.Add(t); t.StatusFX.ApplyEffect(StatusEffectType.Burn, 3f - el, 1.5f, caster); } yield return null; } yield break; }
-            case ActiveSkillType.SnackTime: caster.StatusFX.RemoveAllDebuffs(); caster.Heal(5f); yield break;
+            case ActiveSkillType.SnackTime: caster.StatusFX.RemoveAllDebuffs(); caster.Heal(caster.myData.maxHp * 0.15f); yield break; // 최대HP 15% 회복
             case ActiveSkillType.FeastTime:
             { yield return new WaitForSeconds(4f); foreach (var t in GetEnemiesInRadius(caster, 3.0f, targetPos)) DealSkillDamage(caster, t, caster.myData.baseAtk * 2.5f); yield break; }
         }
@@ -129,7 +129,7 @@ public static class SkillSystem
     private static IEnumerator TrapRoutine(PlayerController caster, Vector2 trapPos)
     {
         float el = 0f; bool triggered = false;
-        while (el < 15f && !triggered) { el += Time.deltaTime; foreach (var col in Physics2D.OverlapCircleAll(trapPos, 0.6f, caster.enemyLayer)) { var t = col.GetComponent<PlayerController>(); if (t != null && !t.IsDead) { triggered = true; t.TakeTrapDamage(2f, caster); t.StatusFX.ApplyEffect(StatusEffectType.Slow, 2f, 0.6f, caster); break; } } yield return null; }
+        while (el < 15f && !triggered) { el += Time.deltaTime; foreach (var col in Physics2D.OverlapCircleAll(trapPos, 0.6f, caster.enemyLayer)) { var t = col.GetComponent<PlayerController>(); if (t != null && !t.IsDead) { triggered = true; t.TakeTrapDamage(caster.myData.baseAtk * 1.5f, caster); t.StatusFX.ApplyEffect(StatusEffectType.Slow, 2f, 0.6f, caster); break; } } yield return null; } // 공격력 150% 트랩 피해
     }
 
     private static IEnumerator KnockbackRoutine(PlayerController target, Vector2 dir, float force)
@@ -144,14 +144,16 @@ public static class SkillSystem
         if (target == null || target.IsDead || caster == null) return;
         float dmg = baseDamage * caster.StatusFX.GetAtkMultiplier();
         if (caster.myData.HasPassive(PassiveSkillType.LuckyStrike) && Random.value < 0.1f) { dmg *= 1.5f; caster.ShowSkillPopup("Lucky!"); }
-        if (caster.myData.HasPassive(PassiveSkillType.Executioner) && target.myData.currentHp <= target.myData.maxHp * 0.25f) dmg += 1.5f;
+        // 처형인: 고정값 +1.5에서 30% 배율로 수정
+        if (caster.myData.HasPassive(PassiveSkillType.Executioner) && target.myData.currentHp <= target.myData.maxHp * 0.25f) dmg *= 1.3f;
         if (target.StatusFX.ConsumeDivineGrace()) return;
         if (target.StatusFX.IsImmune) return;
         dmg = target.StatusFX.AbsorbWithShield(dmg);
         if (target.StatusFX.IsInDefenseStance) dmg *= 0.5f;
         if (target.myData.HasPassive(PassiveSkillType.Guardian) && target.myData.currentHp <= target.myData.maxHp * 0.3f) dmg *= 0.8f;
         if (target.StatusFX.IsInUndyingRage) dmg *= 1.2f;
-        if (target.myData.HasPassive(PassiveSkillType.Thorns) && Vector2.Distance(caster.transform.position, target.transform.position) <= 2.5f) { caster.myData.currentHp -= 0.5f; caster.ShowDotPopup(0.5f, Color.gray); }
+        if (target.myData.HasPassive(PassiveSkillType.Thorns) && Vector2.Distance(caster.transform.position, target.transform.position) <= 2.5f)
+        { float reflectDmg = Mathf.Max(0.5f, dmg * 0.1f); caster.myData.currentHp -= reflectDmg; caster.ShowDotPopup(reflectDmg, Color.gray); } // 스킬 데미지의 10% 반사
         dmg = Mathf.Max(0f, Mathf.Round(dmg * 10f) / 10f);
         if (target.myData.deathMarkActive) target.myData.deathMarkAccumulated += dmg;
         target.myData.currentHp = Mathf.Max(target.myData.currentHp - dmg, 0f);

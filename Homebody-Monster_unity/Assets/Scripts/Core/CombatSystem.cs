@@ -30,22 +30,22 @@ public class CombatSystem : MonoBehaviour
         if (CheckAffinityAdvantage(attacker.affinity, defender.affinity))
         { dmg *= 1.5f; result.isCritical = true; }
 
-        // 특수 상성 (MintChoco vs Pineapple)
+        // 특수 상성 (MintChoco vs Pineapple) - 즉사(9999) 제거 → 3배 데미지로 완화
         if (IsSpecialAffinity(attacker.affinity) && IsSpecialAffinity(defender.affinity) && attacker.affinity != defender.affinity)
-        { dmg = 9999f; result.isWorldCollapse = true; }
+        { dmg *= 3.0f; result.isWorldCollapse = true; }
         else if (IsSpecialAffinity(attacker.affinity) && !IsSpecialAffinity(defender.affinity))
         { dmg *= 1.2f; }
 
-        // 거인 학살자: HP 차이 10당 +0.5
+        // 거인 학살자: 최대 HP 차이 10당 5% 피해 증가 (현재HP로 버그있던 기준을 maxHP로 수정)
         if (attacker.HasPassive(PassiveSkillType.GiantKiller))
         {
-            float diff = defender.currentHp - attacker.currentHp;
-            if (diff >= 10f) { dmg += Mathf.Floor(diff / 10f) * 0.5f; result.isGiantKill = true; }
+            float diff = defender.maxHp - attacker.maxHp;
+            if (diff >= 10f) { dmg *= (1f + Mathf.Floor(diff / 10f) * 0.05f); result.isGiantKill = true; }
         }
 
-        // 처형인: 적 HP <= 25% 시 +1.5
+        // 처형인: 적 HP <= 25% 시 피해 30% 증가 (고정값 +1.5에서 배율로 수정)
         if (attacker.HasPassive(PassiveSkillType.Executioner) && defender.currentHp <= defender.maxHp * 0.25f)
-        { dmg += 1.5f; result.isExecutioner = true; }
+        { dmg *= 1.3f; result.isExecutioner = true; }
 
         // 쉴드 HP 흡수
         if (defenderFX != null && defender.shieldHp > 0f)
@@ -80,9 +80,12 @@ public class CombatSystem : MonoBehaviour
         if (attackerFX != null && attackerFX.IsInUndyingRage)
             attacker.currentHp = Mathf.Min(attacker.currentHp + dealtDamage * 0.5f, attacker.maxHp);
 
-        // 가시갑옷: 근접 공격 반사 0.5
+        // 가시갑옥: 받은 피해의 10% 반사 (최소 0.5) — 고정 0.5에서 비율로 수정
         if (defender.HasPassive(PassiveSkillType.Thorns))
-            attacker.currentHp = Mathf.Max(0f, attacker.currentHp - 0.5f);
+        {
+            float reflectDmg = Mathf.Max(0.5f, dealtDamage * 0.1f);
+            attacker.currentHp = Mathf.Max(0f, attacker.currentHp - reflectDmg);
+        }
 
         defender.lastCombatTime = Time.time;
         attacker.lastCombatTime = Time.time;
@@ -118,10 +121,12 @@ public class CombatSystem : MonoBehaviour
             yield return new UnityEngine.WaitForSeconds(2f);
             if (isDead()) yield break;
             if (!data.HasPassive(PassiveSkillType.Regeneration)) continue;
+            // 재생패시브: 최대HP의 5% 회복 (최소 1.5) — 고정값에서 비례로 수정
             if (Time.time - data.lastCombatTime >= 4f && data.currentHp < data.maxHp)
             {
-                data.currentHp = Mathf.Min(data.currentHp + 1.5f, data.maxHp);
-                Debug.Log($"[Passive] {data.playerName} 재생: +1.5 HP");
+                float regenAmount = Mathf.Max(1.5f, data.maxHp * 0.05f);
+                data.currentHp = Mathf.Min(data.currentHp + regenAmount, data.maxHp);
+                Debug.Log($"[Passive] {data.playerName} 재생: +{regenAmount:0.#} HP");
             }
         }
     }
