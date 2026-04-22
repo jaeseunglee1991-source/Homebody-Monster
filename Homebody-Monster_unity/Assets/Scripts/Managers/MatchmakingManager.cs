@@ -279,7 +279,12 @@ public class MatchmakingManager : MonoBehaviour
             GameManager.Instance.currentRoomId  = endpoint;
             GameManager.Instance.gameServerIp   = ip;
             GameManager.Instance.gameServerPort = port;
+
+            // 매칭 성사 시점에 로컬 플레이어 캐릭터를 랜덤 생성하여 GameManager에 저장
+            // 직업/등급/상성 랜덤 부여 + 액티브(1~4개) + 패시브(0~2개) 스킬 배정
+            GameManager.Instance.myCharacterData = StatCalculator.GenerateRandomCharacter(myNickname);
         }
+
 
         NotifyStatus("매칭 완료! 게임 서버로 접속합니다...");
         OnMatchFound?.Invoke();

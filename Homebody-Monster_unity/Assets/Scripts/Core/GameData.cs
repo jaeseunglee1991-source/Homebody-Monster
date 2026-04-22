@@ -65,7 +65,7 @@ public static class JobSkillPool
     public static List<ActiveSkillType> RollActiveSkills(JobType job)
     {
         var pool = ActivePool[job];
-        int count = Random.Range(1, 5);
+        int count = Random.Range(1, 5); // 1~4개 랜덤 (기획 의도)
         var shuffled = new List<ActiveSkillType>(pool);
         shuffled.Shuffle();
         return shuffled.GetRange(0, Mathf.Min(count, shuffled.Count));
@@ -74,8 +74,9 @@ public static class JobSkillPool
     public static List<PassiveSkillType> RollPassiveSkills()
     {
         var all = System.Enum.GetValues(typeof(PassiveSkillType));
-        int count = Random.Range(0, 5);
+        int count = Random.Range(0, 3); // 0~2개 랜덤 (기획 의도)
         var pool = new List<PassiveSkillType>();
+        if (count == 0) return pool; // 0개일 경우 즉시 반환
         var indices = new List<int>();
         for (int i = 0; i < all.Length; i++) indices.Add(i);
         indices.Shuffle();
