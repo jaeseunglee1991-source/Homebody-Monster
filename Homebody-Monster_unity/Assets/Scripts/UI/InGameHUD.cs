@@ -1,6 +1,5 @@
 using UnityEngine;
 using UnityEngine.UI;
-using System.Collections;
 using System.Collections.Generic;
 
 public class InGameHUD : MonoBehaviour
@@ -26,13 +25,14 @@ public class InGameHUD : MonoBehaviour
         if (endBannerPanel != null) endBannerPanel.SetActive(false);
     }
 
-    private void Start() => StartCoroutine(FindLocalPlayerRoutine());
-
-    private IEnumerator FindLocalPlayerRoutine()
+    /// <summary>
+    /// PlayerController.Start()에서 로컬 플레이어 스폰 직후 호출합니다.
+    /// 코루틴 polling 없이 즉시 UI를 세팅하므로 타이밍 불일치 버그가 없습니다.
+    /// </summary>
+    public void InitPlayerUI(PlayerController player)
     {
-        while (localPlayer == null)
-        { foreach (var p in FindObjectsOfType<PlayerController>()) if (p.IsLocalPlayer) { localPlayer = p; break; } yield return new WaitForSeconds(0.2f); }
-        SetupSkillButtons(localPlayer);
+        localPlayer = player;
+        SetupSkillButtons(player);
     }
 
     private void Update() => UpdateCooldownUI();

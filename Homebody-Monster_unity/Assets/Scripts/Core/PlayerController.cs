@@ -44,7 +44,11 @@ public class PlayerController : MonoBehaviour
         if (myData != null) StartCoroutine(CombatSystem.RegenerationRoutine(myData, () => IsDead));
         InGameManager.Instance?.RegisterPlayer(this);
         if (IsLocalPlayer && InGameHUD.Instance != null && myData != null)
-            InGameHUD.Instance.UpdateHealthBar(myData.currentHp, myData.maxHp);
+        {
+            InGameHUD.Instance.InitPlayerUI(this);          // 스킬 버튼 동적 생성 및 매핑
+            InGameHUD.Instance.UpdateHealthBar(myData.currentHp, myData.maxHp); // 체력바 즉시 반영
+        }
+
     }
 
     private void Update()
