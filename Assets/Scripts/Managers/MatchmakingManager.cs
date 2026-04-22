@@ -64,7 +64,13 @@ public class MatchmakingManager : MonoBehaviour
     public async void StartSearch()
     {
         if (isSearching) return;
-        if (!ValidateSupabase()) return;
+
+        // 💡 1. 네트워크 예외 처리: 서버가 연결 안 되어있으면 팝업 닫기
+        if (!ValidateSupabase()) 
+        {
+            OnMatchmakingFailed?.Invoke(); // UI에게 실패 알림 (팝업 닫힘)
+            return;
+        }
 
         isSearching   = true;
         matchCreated  = false;
@@ -78,6 +84,7 @@ public class MatchmakingManager : MonoBehaviour
         {
             NotifyStatus("로그인이 필요합니다.");
             isSearching = false;
+            OnMatchmakingFailed?.Invoke(); // UI 복구
             return;
         }
 
@@ -88,6 +95,7 @@ public class MatchmakingManager : MonoBehaviour
         if (!inserted)
         {
             isSearching = false;
+            OnMatchmakingFailed?.Invoke(); // 💡 큐 등록 실패 시 팝업 닫기
             return;
         }
 
@@ -158,7 +166,7 @@ public class MatchmakingManager : MonoBehaviour
         catch (Exception e)
         {
             Debug.LogError($"[Matchmaking] 큐 등록 실패: {e.Message}");
-            NotifyStatus("서버 연결 실패.");
+            NotifyStatus("서버 연결에 실패했습니다.");
             return false;
         }
     }
@@ -341,25 +349,36 @@ public class MatchmakingManager : MonoBehaviour
         }
     }
 
+    // 💡 2. 직접 Delete하던 로직을 안전한 RPC(서버 함수) 호출로 변경 완료
     private async Task CleanupMyPreviousEntry()
     {
         if (string.IsNullOrEmpty(myPlayerId)) return;
         try
         {
-            await SupabaseManager.Instance.Client
-                .From("matchmaking_queue")
-                .Filter("player_id", Supabase.Postgrest.Constants.Operator.Equals, myPlayerId)
-                .Filter("status",    Supabase.Postgrest.Constants.Operator.Equals, "waiting")
-                .Delete();
+            var parameters = new Dictionary<string, object>
+            {
+                { "p_player_id", myPlayerId }
+            };
+            await SupabaseManager.Instance.Client.Rpc("leave_matchmaking_queue", parameters);
+            Debug.Log("[Matchmaking] 큐 취소 (DB 삭제 완료)");
         }
-        catch { }
+        catch (Exception e)
+        {
+            Debug.LogError($"[Matchmaking] 큐 취소(DB 삭제) 실패: {e.Message}");
+        }
     }
 
+    // 💡 3. 서버 연결 상태 확인 보강 (UI 피드백 향상)
     private bool ValidateSupabase()
     {
         if (SupabaseManager.Instance == null || !SupabaseManager.Instance.IsInitialized)
         {
-            NotifyStatus("서버 초기화 중입니다.");
+            NotifyStatus("서버 연결이 불안정합니다. 네트워크를 확인해주세요.");
+            return false;
+        }
+        if (SupabaseManager.Instance.Client.Auth.CurrentUser == null)
+        {
+            NotifyStatus("세션이 만료되었습니다. 다시 로그인해주세요.");
             return false;
         }
         return true;
