@@ -1,116 +1,141 @@
 using UnityEngine;
 
-/// <summary>
-/// 전투 연산을 담당합니다 (서버 권장 로직).
-/// 모든 스킬 효과가 여기서 계산됩니다.
-/// </summary>
 public class CombatSystem : MonoBehaviour
 {
-    /// <summary>
-    /// 공격자가 방어자를 타격했을 때 최종 데미지를 계산합니다.
-    /// </summary>
-    public static DamageResult CalculateDamage(CharacterData attacker, CharacterData defender)
+    public static DamageResult CalculateDamage(CharacterData attacker, CharacterData defender,
+        StatusEffectSystem attackerFX, StatusEffectSystem defenderFX)
     {
-        DamageResult result = new DamageResult();
-        float damage = attacker.baseAtk;
+        var result = new DamageResult();
+        float dmg = attacker.baseAtk;
 
-        // ── 1. 회피 판정 (Ninja 스킬) ─────────────────────────
-        if (defender.skills.Contains(SkillType.Ninja))
-        {
-            float evadeChance = 0.30f;
-            if (Random.value < evadeChance)
-            {
-                result.isEvaded = true;
-                result.finalDamage = 0f;
-                return result;
-            }
-        }
+        if (attackerFX != null) dmg *= attackerFX.GetAtkMultiplier();
 
-        // ── 2. Shield 스킬: 방어자의 피해 감소 ───────────────
-        float shieldReduction = 0f;
-        if (defender.skills.Contains(SkillType.Shield))
-        {
-            shieldReduction = damage * 0.25f; // 25% 피해 감소
-            result.isShielded = true;
-        }
+        // 닌자: 피격 회피 15%
+        if (defender.HasPassive(PassiveSkillType.Ninja) && Random.value < 0.15f)
+        { result.isEvaded = true; result.finalDamage = 0f; return result; }
 
-        // ── 3. 상성 판정 ─────────────────────────────────────
-        bool advantageous = CheckAffinityAdvantage(attacker.affinity, defender.affinity);
-        if (advantageous)
-        {
-            damage *= 1.5f;
-            result.isCritical = true;
-        }
+        // 신의 가호: 완전 무효화
+        if (defenderFX != null && defenderFX.ConsumeDivineGrace())
+        { result.isDivineGraceBlocked = true; result.finalDamage = 0f; return result; }
 
-        // ── 4. 특수 상성 (세계관 붕괴 기믹) ─────────────────
-        if (IsSpecialAffinity(attacker.affinity) && IsSpecialAffinity(defender.affinity)
-            && attacker.affinity != defender.affinity)
-        {
-            damage = 9999f;
-            result.isWorldCollapse = true;
-        }
+        // 면역
+        if (defenderFX != null && defenderFX.IsImmune)
+        { result.isEvaded = true; result.finalDamage = 0f; return result; }
+
+        // 행운의 일격: 10% 확률 1.5배
+        if (attacker.HasPassive(PassiveSkillType.LuckyStrike) && Random.value < 0.1f)
+        { dmg *= 1.5f; result.isLuckyStrike = true; }
+
+        // 상성 판정
+        if (CheckAffinityAdvantage(attacker.affinity, defender.affinity))
+        { dmg *= 1.5f; result.isCritical = true; }
+
+        // 특수 상성 (MintChoco vs Pineapple)
+        if (IsSpecialAffinity(attacker.affinity) && IsSpecialAffinity(defender.affinity) && attacker.affinity != defender.affinity)
+        { dmg = 9999f; result.isWorldCollapse = true; }
         else if (IsSpecialAffinity(attacker.affinity) && !IsSpecialAffinity(defender.affinity))
+        { dmg *= 1.2f; }
+
+        // 거인 학살자: HP 차이 10당 +0.5
+        if (attacker.HasPassive(PassiveSkillType.GiantKiller))
         {
-            damage *= 1.2f;
+            float diff = defender.currentHp - attacker.currentHp;
+            if (diff >= 10f) { dmg += Mathf.Floor(diff / 10f) * 0.5f; result.isGiantKill = true; }
         }
 
-        // ── 5. Berserker: 저체력 시 데미지 증가 ──────────────
-        if (attacker.skills.Contains(SkillType.Berserker)
-            && attacker.currentHp <= attacker.maxHp * 0.5f)
-        {
-            damage *= 1.5f;
-        }
+        // 처형인: 적 HP <= 25% 시 +1.5
+        if (attacker.HasPassive(PassiveSkillType.Executioner) && defender.currentHp <= defender.maxHp * 0.25f)
+        { dmg += 1.5f; result.isExecutioner = true; }
 
-        // ── 6. GiantKiller: 공격 대상 HP가 높을수록 데미지 증가
-        if (attacker.skills.Contains(SkillType.GiantKiller))
-        {
-            float hpDiff = defender.currentHp - attacker.currentHp;
-            if (hpDiff > 0f)
-            {
-                float bonus = Mathf.Clamp(hpDiff / defender.maxHp, 0f, 0.5f); 
-                damage *= 1f + bonus;
-                result.isGiantKill = true;
-            }
-        }
+        // 쉴드 HP 흡수
+        if (defenderFX != null && defender.shieldHp > 0f)
+        { dmg = defenderFX.AbsorbWithShield(dmg); result.isShielded = true; }
 
-        // ── 7. Guardian: 저체력 방어자 피해 감소 ─────────────
-        if (defender.skills.Contains(SkillType.Guardian)
-            && defender.currentHp <= defender.maxHp * 0.3f)
-        {
-            damage *= 0.6f; // 체력 30% 이하 시 40% 피해 감소
-            result.isGuarded = true;
-        }
+        // 방어 태세: 정면 50% 감소
+        if (defenderFX != null && defenderFX.IsInDefenseStance) dmg *= 0.5f;
 
-        damage -= shieldReduction;
-        damage = Mathf.Max(damage, 0f); 
+        // 수호자: HP <= 30% 시 피해 20% 감소
+        if (defender.HasPassive(PassiveSkillType.Guardian) && defender.currentHp <= defender.maxHp * 0.3f)
+        { dmg *= 0.8f; result.isGuarded = true; }
 
-        result.finalDamage = Mathf.Round(damage * 10f) / 10f;
+        // 불굴의 분노: 수신 피해 +20%
+        if (defenderFX != null && defenderFX.IsInUndyingRage) dmg *= 1.2f;
+
+        dmg = Mathf.Max(0f, Mathf.Round(dmg * 10f) / 10f);
+        result.finalDamage = dmg;
         return result;
     }
 
-    private static bool CheckAffinityAdvantage(AffinityType attacker, AffinityType defender)
+    public static void PostDamageEffects(CharacterData attacker, CharacterData defender,
+        StatusEffectSystem attackerFX, StatusEffectSystem defenderFX, float dealtDamage)
     {
-        if (attacker == AffinityType.Spicy   && defender == AffinityType.Greasy) return true;
-        if (attacker == AffinityType.Greasy  && defender == AffinityType.Fresh)  return true;
-        if (attacker == AffinityType.Fresh   && defender == AffinityType.Salty)  return true;
-        if (attacker == AffinityType.Salty   && defender == AffinityType.Sweet)  return true;
-        if (attacker == AffinityType.Sweet   && defender == AffinityType.Spicy)  return true;
+        if (dealtDamage <= 0f) return;
+        if (defender.deathMarkActive) defender.deathMarkAccumulated += dealtDamage;
+
+        // 흡혈: 피해의 20%, 최소 0.5
+        if (attacker.HasPassive(PassiveSkillType.Lifesteal))
+            attacker.currentHp = Mathf.Min(attacker.currentHp + Mathf.Max(0.5f, dealtDamage * 0.2f), attacker.maxHp);
+
+        // 불굴의 분노 흡혈 50%
+        if (attackerFX != null && attackerFX.IsInUndyingRage)
+            attacker.currentHp = Mathf.Min(attacker.currentHp + dealtDamage * 0.5f, attacker.maxHp);
+
+        // 가시갑옷: 근접 공격 반사 0.5
+        if (defender.HasPassive(PassiveSkillType.Thorns))
+            attacker.currentHp = Mathf.Max(0f, attacker.currentHp - 0.5f);
+
+        defender.lastCombatTime = Time.time;
+        attacker.lastCombatTime = Time.time;
+    }
+
+    // 불굴 패시브: 즉사 방지
+    public static bool TryTenacity(CharacterData defender, StatusEffectSystem defenderFX)
+    {
+        if (defender.tenacityUsed) return false;
+        if (!defender.HasPassive(PassiveSkillType.Tenacity)) return false;
+        defender.tenacityUsed = true;
+        defender.currentHp = 1f;
+        defenderFX.ApplyEffect(StatusEffectType.TenacityShield, 1.5f);
+        Debug.Log($"[Passive] {defender.playerName} 불굴 발동! 1.5초 무적");
+        return true;
+    }
+
+    // 수호 천사 궁극기: 즉사 방지
+    public static bool TryGuardianAngel(CharacterData defender, StatusEffectSystem defenderFX)
+    {
+        if (!defenderFX.HasGuardianAngel) return false;
+        defender.currentHp = defender.maxHp * 0.3f;
+        defenderFX.RemoveEffect(StatusEffectType.GuardianAngel);
+        Debug.Log($"[Skill] {defender.playerName} 수호 천사 발동! HP {defender.currentHp:0.#}로 생존");
+        return true;
+    }
+
+    // 재생 패시브: 비전투 시 2초마다 HP 1.5 회복
+    public static System.Collections.IEnumerator RegenerationRoutine(CharacterData data, System.Func<bool> isDead)
+    {
+        while (true)
+        {
+            yield return new UnityEngine.WaitForSeconds(2f);
+            if (isDead()) yield break;
+            if (!data.HasPassive(PassiveSkillType.Regeneration)) continue;
+            if (Time.time - data.lastCombatTime >= 4f && data.currentHp < data.maxHp)
+            {
+                data.currentHp = Mathf.Min(data.currentHp + 1.5f, data.maxHp);
+                Debug.Log($"[Passive] {data.playerName} 재생: +1.5 HP");
+            }
+        }
+    }
+
+    private static bool CheckAffinityAdvantage(AffinityType atk, AffinityType def)
+    {
+        if (atk == AffinityType.Spicy  && def == AffinityType.Greasy) return true;
+        if (atk == AffinityType.Greasy && def == AffinityType.Fresh)  return true;
+        if (atk == AffinityType.Fresh  && def == AffinityType.Salty)  return true;
+        if (atk == AffinityType.Salty  && def == AffinityType.Sweet)  return true;
+        if (atk == AffinityType.Sweet  && def == AffinityType.Spicy)  return true;
         return false;
     }
 
-    private static bool IsSpecialAffinity(AffinityType affinity)
-    {
-        return affinity == AffinityType.MintChoco || affinity == AffinityType.Pineapple;
-    }
-}
-
-public struct DamageResult
-{
-    public float finalDamage;
-    public bool isEvaded;        
-    public bool isCritical;      
-    public bool isWorldCollapse; 
-    public bool isShielded;      
-    public bool isGiantKill;     
-    public bool isGuarded;       
+    private static bool IsSpecialAffinity(AffinityType affinity) =>
+        affinity == AffinityType.MintChoco || affinity == AffinityType.Pineapple;
 }
