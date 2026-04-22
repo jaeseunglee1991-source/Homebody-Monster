@@ -2,57 +2,72 @@ using UnityEngine;
 
 public static class StatCalculator
 {
-    // 등급별 배율 계산 (0단계 1.0배 ~ 9단계 2.0배)
-    public static float GetGradeMultiplier(GradeTier grade)
-    {
-        return 1.0f + ((int)grade * 0.111f); 
-    }
+    public static float GetGradeMultiplier(GradeTier grade) => 1.0f + (int)grade * 0.111f;
 
-    public static CharacterData GenerateRandomCharacter(string name)
+    private struct JobStat { public float HpBonus, AtkBonus, Speed; }
+
+    private static readonly System.Collections.Generic.Dictionary<JobType, JobStat> JobBaseStats
+        = new System.Collections.Generic.Dictionary<JobType, JobStat>
     {
-        CharacterData data = new CharacterData();
+        { JobType.Warrior,   new JobStat { HpBonus =  5f, AtkBonus =  0.5f, Speed = 3.0f } },
+        { JobType.Tanker,    new JobStat { HpBonus = 15f, AtkBonus = -0.5f, Speed = 2.5f } },
+        { JobType.Paladin,   new JobStat { HpBonus =  3f, AtkBonus =  0.5f, Speed = 2.8f } },
+        { JobType.Berserker, new JobStat { HpBonus = -3f, AtkBonus =  1.5f, Speed = 3.2f } },
+        { JobType.Mage,      new JobStat { HpBonus = -5f, AtkBonus =  3.0f, Speed = 2.8f } },
+        { JobType.Archer,    new JobStat { HpBonus = -2f, AtkBonus =  1.0f, Speed = 3.3f } },
+        { JobType.Priest,    new JobStat { HpBonus =  0f, AtkBonus =  0.0f, Speed = 2.9f } },
+        { JobType.Rogue,     new JobStat { HpBonus = -3f, AtkBonus =  1.2f, Speed = 3.5f } },
+        { JobType.Assassin,  new JobStat { HpBonus = -2f, AtkBonus =  1.5f, Speed = 3.8f } },
+        { JobType.Chef,      new JobStat { HpBonus =  2f, AtkBonus =  0.3f, Speed = 3.0f } },
+    };
+
+    public static CharacterData GenerateCharacter(string name, JobType? forceJob = null)
+    {
+        var data = new CharacterData();
         data.playerName = name;
-        
-        // 랜덤 요소 부여
-        data.job = (JobType)Random.Range(0, System.Enum.GetValues(typeof(JobType)).Length);
+        data.job      = forceJob ?? (JobType)Random.Range(0, 10);
         data.affinity = (AffinityType)Random.Range(0, System.Enum.GetValues(typeof(AffinityType)).Length);
-        data.grade = (GradeTier)Random.Range(0, System.Enum.GetValues(typeof(GradeTier)).Length);
+        data.grade    = (GradeTier)Random.Range(0, System.Enum.GetValues(typeof(GradeTier)).Length);
 
-        // 기본 스탯 (로우스탯 기반)
-        float rawHp = Random.Range(20f, 50f);
+        float rawHp  = Random.Range(20f, 50f);
         float rawAtk = Random.Range(2.0f, 5.0f);
-        float multiplier = GetGradeMultiplier(data.grade);
+        float mult   = GetGradeMultiplier(data.grade);
+        var stat = JobBaseStats[data.job];
 
-        // 직업별 보너스 스탯 (소수점 단위의 작은 차이)
-        float jobHpBonus = 0f;
-        float jobAtkBonus = 0f;
-        float jobSpeed = 3.0f; // 기본 이동속도
-
-        switch (data.job)
-        {
-            case JobType.Tanker: jobHpBonus = 15f; jobAtkBonus = -0.5f; jobSpeed = 2.5f; break;
-            case JobType.Mage: jobHpBonus = -5f; jobAtkBonus = 3.0f; jobSpeed = 2.8f; break;
-            case JobType.Assassin: jobHpBonus = -2f; jobAtkBonus = 1.5f; jobSpeed = 3.8f; break;
-            // 추가 직업 밸런싱...
-        }
-
-        // 최종 스탯 결정 (소수점 첫째 자리까지만 반올림하여 깔끔하게 유지)
-        data.maxHp = Mathf.Round((rawHp * multiplier + jobHpBonus) * 10f) / 10f;
+        data.maxHp     = Round1(rawHp  * mult + stat.HpBonus);
         data.currentHp = data.maxHp;
-        data.baseAtk = Mathf.Round((rawAtk * multiplier + jobAtkBonus) * 10f) / 10f;
-        data.moveSpeed = jobSpeed;
+        data.baseAtk   = Round1(rawAtk * mult + stat.AtkBonus);
+        data.moveSpeed = stat.Speed;
 
-        // 랜덤 스킬 1~4개 부여
-        int skillCount = Random.Range(1, 5);
-        for (int i = 0; i < skillCount; i++)
-        {
-            SkillType randomSkill = (SkillType)Random.Range(0, System.Enum.GetValues(typeof(SkillType)).Length);
-            if (!data.skills.Contains(randomSkill))
-            {
-                data.skills.Add(randomSkill);
-            }
-        }
-
+        RollSkills(data);
+        Debug.Log($"[StatCalc] {data.playerName} | {data.job}/{data.affinity}/{data.grade} HP:{data.maxHp:0.#} ATK:{data.baseAtk:0.#}");
         return data;
     }
+
+    // 게임 시작 시: 패시브 0~4개 + 직업 액티브 1~4개 랜덤 배정
+    public static void RollSkills(CharacterData data)
+    {
+        data.passiveSkills.Clear();
+        data.activeSkills.Clear();
+        data.passiveSkills = JobSkillPool.RollPassiveSkills();
+        data.activeSkills  = JobSkillPool.RollActiveSkills(data.job);
+    }
+
+    public static CharacterData GenerateRandomCharacter(string name) => GenerateCharacter(name);
+
+    public static float GetEffectiveMoveSpeed(CharacterData data, StatusEffectSystem statusFX)
+    {
+        float speed = data.moveSpeed;
+        if (data.HasPassive(PassiveSkillType.Swiftness)) speed *= 1.1f;
+        if (statusFX != null) speed *= statusFX.GetMoveSpeedMultiplier();
+        return Mathf.Max(0f, speed);
+    }
+
+    public static float ModifySlowDuration(CharacterData target, float duration)
+    {
+        if (target.HasPassive(PassiveSkillType.Swiftness)) duration *= 0.7f;
+        return duration;
+    }
+
+    private static float Round1(float v) => Mathf.Round(v * 10f) / 10f;
 }
