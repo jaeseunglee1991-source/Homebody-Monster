@@ -29,6 +29,7 @@ public class InGameManager : MonoBehaviour
     private bool gameEnded = false;
     private float gameStartTime;
     private float elapsedTime;
+    private float cleanupTimer = 0f; // 연결 끊김 감지 주기 타이머
 
     private void Awake()
     {
@@ -50,6 +51,14 @@ public class InGameManager : MonoBehaviour
             elapsedTime = Time.time - gameStartTime;
             if (InGameHUD.Instance != null)
                 InGameHUD.Instance.UpdateTimer(elapsedTime);
+
+            // 1초마다 null(파괴/이탈)된 플레이어를 솎아내는 가비지 컬렉터
+            cleanupTimer += Time.deltaTime;
+            if (cleanupTimer >= 1f)
+            {
+                cleanupTimer = 0f;
+                CleanUpDisconnectedPlayers();
+            }
         }
     }
 
@@ -76,6 +85,39 @@ public class InGameManager : MonoBehaviour
         RefreshHUD();
 
         CheckWinCondition();
+    }
+
+    /// <summary>
+    /// AppNetworkManager의 서버측 콜백에서 클라이언트 이탈이 감지되면 호출됩니다.
+    /// 이탈자를 alivePlayers에서 즉시 제거하고 승리 조건을 재확인합니다.
+    /// </summary>
+    public void OnPlayerDisconnected(PlayerController disconnectedPlayer)
+    {
+        if (disconnectedPlayer == null || !alivePlayers.Contains(disconnectedPlayer)) return;
+
+        Debug.Log($"[InGameManager] 플레이어 연결 끊김 처리: {disconnectedPlayer.myData?.playerName}");
+        alivePlayers.Remove(disconnectedPlayer);
+
+        // 이탈자의 오브젝트 파괴 (남겨두면 관리가 복잡해짐)
+        if (disconnectedPlayer.gameObject != null)
+            Destroy(disconnectedPlayer.gameObject);
+
+        RefreshHUD();
+        CheckWinCondition();
+    }
+
+    /// <summary>
+    /// Update에서 1초마다 호출: 이벤트 누락 등으로 null이 된 플레이어를 강제 정리합니다.
+    /// </summary>
+    private void CleanUpDisconnectedPlayers()
+    {
+        int removed = alivePlayers.RemoveAll(p => p == null || !p.gameObject.activeInHierarchy);
+        if (removed > 0)
+        {
+            Debug.Log($"[InGameManager] 비정상 이탈 플레이어 {removed}명 정리 완료.");
+            RefreshHUD();
+            CheckWinCondition();
+        }
     }
 
     private void CheckWinCondition()

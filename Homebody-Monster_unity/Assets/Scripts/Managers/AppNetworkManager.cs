@@ -124,11 +124,38 @@ public class AppNetworkManager : MonoBehaviour
 
     private void HandleClientDisconnected(ulong clientId)
     {
-        if (NetworkManager.Singleton.IsServer) return;
-        string reason = NetworkManager.Singleton.DisconnectReason;
-        if (string.IsNullOrEmpty(reason)) reason = "서버 연결이 끊어졌습니다.";
-        Debug.LogWarning($"[AppNetworkManager] ⚠️ 연결 해제: {reason}");
-        OnClientDisconnected?.Invoke(reason);
+        string reason = NetworkManager.Singleton != null && !string.IsNullOrEmpty(NetworkManager.Singleton.DisconnectReason)
+            ? NetworkManager.Singleton.DisconnectReason
+            : "연결이 끊어졌습니다.";
+
+        if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer)
+        {
+            // ── 서버: 이탈한 클라이언트의 PlayerController를 찾아 InGameManager에 알림 ──
+            Debug.LogWarning($"[AppNetworkManager] ⚠️ 클라이언트 이탈 감지 (clientId: {clientId})");
+            PlayerController disconnected = FindPlayerByClientId(clientId);
+            if (disconnected != null)
+                InGameManager.Instance?.OnPlayerDisconnected(disconnected);
+        }
+        else
+        {
+            // ── 클라이언트: 로컬 유저가 서버와 연결이 끊긴 경우 ──
+            Debug.LogWarning($"[AppNetworkManager] ⚠️ 서버 연결 해제: {reason}");
+            OnClientDisconnected?.Invoke(reason);
+        }
+    }
+
+    /// <summary>
+    /// NGO NetworkObject를 순회하여 clientId에 해당하는 PlayerController를 반환합니다.
+    /// </summary>
+    private static PlayerController FindPlayerByClientId(ulong clientId)
+    {
+        foreach (var obj in UnityEngine.Object.FindObjectsOfType<PlayerController>())
+        {
+            var netObj = obj.GetComponent<Unity.Netcode.NetworkObject>();
+            if (netObj != null && netObj.OwnerClientId == clientId)
+                return obj;
+        }
+        return null;
     }
 
     // ════════════════════════════════════════════════════════════
