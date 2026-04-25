@@ -16,7 +16,8 @@ public class GameManager : MonoBehaviour
 
     [Header("Player Data")]
     public string currentPlayerId;
-    public CharacterData myCharacterData; 
+    public CharacterData myCharacterData;
+    public int reviveTicketCount = 0;
 
     [Header("Match Info")]
     public string currentRoomId;        // 매칭된 방 식별자 ("ip:port" 형태)

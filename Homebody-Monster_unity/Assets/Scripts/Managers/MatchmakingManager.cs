@@ -6,18 +6,26 @@ using System.Linq;
 using System.Threading.Tasks;
 using Supabase.Realtime;
 using Supabase.Realtime.PostgresChanges;
+using static Supabase.Realtime.PostgresChanges.PostgresChangesOptions;
 
 // ════════════════════════════════════════════════════════════════
 //  Supabase matchmaking_queue 테이블 모델
 // ════════════════════════════════════════════════════════════════
 [Serializable]
-public class MatchmakingEntry
+[Supabase.Postgrest.Attributes.Table("matchmaking_queue")]
+public class MatchmakingEntry : Supabase.Postgrest.Models.BaseModel
 {
+    [Supabase.Postgrest.Attributes.PrimaryKey("id", false)]
     [Newtonsoft.Json.JsonProperty("id")]          public string Id        { get; set; }
+    [Supabase.Postgrest.Attributes.Column("player_id")]
     [Newtonsoft.Json.JsonProperty("player_id")]   public string PlayerId  { get; set; }
+    [Supabase.Postgrest.Attributes.Column("nickname")]
     [Newtonsoft.Json.JsonProperty("nickname")]    public string Nickname  { get; set; }
+    [Supabase.Postgrest.Attributes.Column("joined_at")]
     [Newtonsoft.Json.JsonProperty("joined_at")]   public string JoinedAt  { get; set; }
+    [Supabase.Postgrest.Attributes.Column("room_id")]
     [Newtonsoft.Json.JsonProperty("room_id")]     public string RoomId    { get; set; } // 매칭 성사 시 "ip:port" 형식으로 기록
+    [Supabase.Postgrest.Attributes.Column("status")]
     [Newtonsoft.Json.JsonProperty("status")]      public string Status    { get; set; } // waiting | matched | cancelled
 }
 
@@ -122,15 +130,14 @@ public class MatchmakingManager : MonoBehaviour
         {
             // 대기 중인 플레이어 목록 (입장 순 정렬)
             var response = await SupabaseManager.Instance.Client
-                .From("matchmaking_queue")
+                .From<MatchmakingEntry>()
                 .Filter("status", Supabase.Postgrest.Constants.Operator.Equals, "waiting")
                 .Order("joined_at", Supabase.Postgrest.Constants.Ordering.Ascending)
                 .Get();
 
-            if (response?.Content == null) return;
+            if (response?.Models == null) return;
 
-            var queue = Newtonsoft.Json.JsonConvert.DeserializeObject<List<MatchmakingEntry>>(response.Content)
-                        ?? new List<MatchmakingEntry>();
+            var queue = response.Models.ToList();
 
             if (queue.Count == 0) return;
 
@@ -160,7 +167,7 @@ public class MatchmakingManager : MonoBehaviour
                     // 인원 부족 → 서버가 해당 플레이어 큐에서 제거
                     Debug.Log($"[Server] 인원 부족으로 매칭 취소: {oldest.Nickname} ({waitSec:0}초 대기)");
                     var param = new Dictionary<string, object> { { "p_player_id", oldest.PlayerId } };
-                    await SupabaseManager.Instance.Client.Rpc("leave_matchmaking_queue", param);
+                    await SupabaseManager.Instance.Client.Rpc<string>("leave_matchmaking_queue", param);
                 }
             }
         }
@@ -182,7 +189,7 @@ public class MatchmakingManager : MonoBehaviour
                 { "p_queue_ids", players.Select(p => p.Id).ToList() },
                 { "p_server_ip", endpoint }
             };
-            await SupabaseManager.Instance.Client.Rpc("server_assign_match", param);
+            await SupabaseManager.Instance.Client.Rpc<string>("server_assign_match", param);
         }
         catch (Exception e) { Debug.LogError($"[Server] 매칭 DB 업데이트 실패: {e.Message}"); }
     }
@@ -312,13 +319,12 @@ public class MatchmakingManager : MonoBehaviour
     //  📡 Supabase Realtime 콜백
     // ════════════════════════════════════════════════════════════
 
-    private void OnQueueInsert(PostgresChangesEventArgs change)
+    private void OnQueueInsert(PostgresChangesResponse change)
     {
         if (!isSearching) return;
         try
         {
-            var entry = Newtonsoft.Json.JsonConvert.DeserializeObject<MatchmakingEntry>(
-                change.Response.Data.Record.ToString());
+            var entry = change.Model<MatchmakingEntry>();
             if (entry != null && !currentQueue.Exists(e => e.Id == entry.Id))
             {
                 currentQueue.Add(entry);
@@ -328,13 +334,12 @@ public class MatchmakingManager : MonoBehaviour
         catch { _ = RefreshQueueSnapshot(); }
     }
 
-    private void OnQueueUpdate(PostgresChangesEventArgs change)
+    private void OnQueueUpdate(PostgresChangesResponse change)
     {
         if (!isSearching || matchCreated) return;
         try
         {
-            var updated = Newtonsoft.Json.JsonConvert.DeserializeObject<MatchmakingEntry>(
-                change.Response.Data.Record.ToString());
+            var updated = change.Model<MatchmakingEntry>();
 
             if (updated?.PlayerId != myPlayerId) return;
 
@@ -346,7 +351,7 @@ public class MatchmakingManager : MonoBehaviour
         catch (Exception e) { Debug.LogError($"[Matchmaking] UPDATE 처리 오류: {e.Message}"); }
     }
 
-    private void OnQueueDelete(PostgresChangesEventArgs change)
+    private void OnQueueDelete(PostgresChangesResponse change)
     {
         if (!isSearching) return;
         _ = RefreshQueueSnapshot();
@@ -360,18 +365,17 @@ public class MatchmakingManager : MonoBehaviour
     {
         try
         {
-            var entry = new Dictionary<string, object>
+            var newEntry = new MatchmakingEntry
             {
-                { "player_id", myPlayerId },
-                { "nickname",  myNickname },
-                { "status",    "waiting"  },
-                { "room_id",   null       }
+                PlayerId = myPlayerId,
+                Nickname = myNickname,
+                Status = "waiting",
+                RoomId = null
             };
-            var response = await SupabaseManager.Instance.Client.From("matchmaking_queue").Insert(entry);
-            if (response?.Content != null)
+            var response = await SupabaseManager.Instance.Client.From<MatchmakingEntry>().Insert(newEntry);
+            if (response?.Models != null && response.Models.Count > 0)
             {
-                var list = Newtonsoft.Json.JsonConvert.DeserializeObject<List<MatchmakingEntry>>(response.Content);
-                if (list?.Count > 0) myQueueEntryId = list[0].Id;
+                myQueueEntryId = response.Models[0].Id;
             }
             return true;
         }
@@ -389,14 +393,13 @@ public class MatchmakingManager : MonoBehaviour
         {
             realtimeChannel = SupabaseManager.Instance.Client.Realtime.Channel("matchmaking_queue");
 
-            realtimeChannel.OnPostgresChange(ListenType.Inserts, "public", "matchmaking_queue",
-                (s, c) => MainThreadDispatcher.Enqueue(() => OnQueueInsert(c)));
-
-            realtimeChannel.OnPostgresChange(ListenType.Updates, "public", "matchmaking_queue",
-                (s, c) => MainThreadDispatcher.Enqueue(() => OnQueueUpdate(c)));
-
-            realtimeChannel.OnPostgresChange(ListenType.Deletes, "public", "matchmaking_queue",
-                (s, c) => MainThreadDispatcher.Enqueue(() => OnQueueDelete(c)));
+            realtimeChannel.Register(new PostgresChangesOptions("public", "matchmaking_queue"));
+            realtimeChannel.AddPostgresChangeHandler(ListenType.Inserts,
+                (_, c) => MainThreadDispatcher.Enqueue(() => OnQueueInsert(c)));
+            realtimeChannel.AddPostgresChangeHandler(ListenType.Updates,
+                (_, c) => MainThreadDispatcher.Enqueue(() => OnQueueUpdate(c)));
+            realtimeChannel.AddPostgresChangeHandler(ListenType.Deletes,
+                (_, c) => MainThreadDispatcher.Enqueue(() => OnQueueDelete(c)));
 
             await realtimeChannel.Subscribe();
             await RefreshQueueSnapshot();
@@ -409,14 +412,13 @@ public class MatchmakingManager : MonoBehaviour
         try
         {
             var response = await SupabaseManager.Instance.Client
-                .From("matchmaking_queue")
+                .From<MatchmakingEntry>()
                 .Filter("status", Supabase.Postgrest.Constants.Operator.Equals, "waiting")
                 .Order("joined_at", Supabase.Postgrest.Constants.Ordering.Ascending)
                 .Get();
 
-            if (response?.Content != null)
-                currentQueue = Newtonsoft.Json.JsonConvert.DeserializeObject<List<MatchmakingEntry>>(response.Content)
-                               ?? new List<MatchmakingEntry>();
+            if (response?.Models != null)
+                currentQueue = response.Models;
             NotifyQueueCount();
         }
         catch (Exception e) { Debug.LogError($"[Matchmaking] 큐 조회 실패: {e.Message}"); }
@@ -436,7 +438,7 @@ public class MatchmakingManager : MonoBehaviour
     {
         if (realtimeChannel != null)
         {
-            try { await realtimeChannel.Unsubscribe(); } catch { }
+            try { realtimeChannel.Unsubscribe(); } catch { }
             realtimeChannel = null;
         }
     }
@@ -447,7 +449,7 @@ public class MatchmakingManager : MonoBehaviour
         try
         {
             var param = new Dictionary<string, object> { { "p_player_id", myPlayerId } };
-            await SupabaseManager.Instance.Client.Rpc("leave_matchmaking_queue", param);
+            await SupabaseManager.Instance.Client.Rpc<string>("leave_matchmaking_queue", param);
         }
         catch (Exception e) { Debug.LogError($"[Matchmaking] 큐 취소 실패: {e.Message}"); }
     }

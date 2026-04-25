@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using UnityEngine;
 using Unity.Netcode;
 using Unity.Netcode.Transports.UTP;
@@ -85,30 +86,76 @@ public class AppNetworkManager : MonoBehaviour
 
     public void Disconnect()
     {
+        // 로비 채팅 채널 정리 (씬 전환 시 구독 해제)
+        DisconnectLobbyChat();
+
         if (NetworkManager.Singleton != null && (NetworkManager.Singleton.IsClient || NetworkManager.Singleton.IsConnectedClient))
             NetworkManager.Singleton.Shutdown();
+    }
+
+    /// <summary>로비 채팅 Realtime 채널만 정리합니다 (NGO 연결과 무관).</summary>
+    public async void DisconnectLobbyChat()
+    {
+        if (SupabaseManager.Instance != null)
+        {
+            SupabaseManager.Instance.OnLobbyChatReceived -= HandleLobbyChatReceived;
+            await SupabaseManager.Instance.UnsubscribeLobbyChat();
+        }
     }
 
     // ════════════════════════════════════════════════════════════
     //  로비 연결 (Supabase Realtime 기반, NGO 불필요)
     // ════════════════════════════════════════════════════════════
 
-    public void ConnectToLobby()
+    public async void ConnectToLobby()
     {
-        // 현재: 로컬 플레이어만 노출 (향후 Supabase Presence로 확장)
+        // 1. 접속자 목록 (현재 로컬만, 향후 Supabase Presence로 확장)
         var players = new List<string> { GameManager.Instance?.currentPlayerId ?? "나" };
         OnPlayerListUpdated?.Invoke(players);
+
+        // 2. Supabase Realtime 로비 채팅 채널 구독
+        if (SupabaseManager.Instance != null && SupabaseManager.Instance.IsInitialized)
+        {
+            SupabaseManager.Instance.OnLobbyChatReceived -= HandleLobbyChatReceived; // 중복 방지
+            SupabaseManager.Instance.OnLobbyChatReceived += HandleLobbyChatReceived;
+            await SupabaseManager.Instance.SubscribeLobbyChat();
+        }
+        else
+        {
+            Debug.LogWarning("[AppNetworkManager] Supabase 미초기화 — 로비 채팅 오프라인 모드");
+        }
+    }
+
+    /// <summary>Supabase Realtime에서 수신한 채팅 메시지를 LobbyUIController로 전달합니다.</summary>
+    private void HandleLobbyChatReceived(string nickname, string message)
+    {
+        string formatted = $"[{nickname}]: {message}";
+        OnChatReceived?.Invoke(formatted);
     }
 
     // ════════════════════════════════════════════════════════════
-    //  채팅 (로비 & 결과 화면 공용)
+    //  채팅 전송 (로비 전용 — Supabase Realtime Broadcast)
     // ════════════════════════════════════════════════════════════
 
-    public void SendChatMessage(string message)
+    public async void SendChatMessage(string message)
     {
-        string formatted = $"[{GameManager.Instance?.currentPlayerId ?? "?"}]: {message}";
-        // TODO: Supabase Realtime 채널을 통해 브로드캐스트 구현
-        OnChatReceived?.Invoke(formatted);
+        string nickname = GameManager.Instance?.currentPlayerId ?? "???";
+
+        if (SupabaseManager.Instance != null && SupabaseManager.Instance.IsLobbyChatSubscribed)
+        {
+            bool sent = await SupabaseManager.Instance.SendLobbyChatMessage(nickname, message);
+            if (!sent)
+            {
+                // 전송 실패 시 로컬에만 안내 표시
+                OnChatReceived?.Invoke("[시스템]: 메시지 전송에 실패했습니다. 잠시 후 다시 시도해주세요.");
+            }
+        }
+        else
+        {
+            // 오프라인 폴백: 로컬 에코만 수행
+            string formatted = $"[{nickname}]: {message}";
+            OnChatReceived?.Invoke(formatted);
+        }
     }
 
     // ════════════════════════════════════════════════════════════
