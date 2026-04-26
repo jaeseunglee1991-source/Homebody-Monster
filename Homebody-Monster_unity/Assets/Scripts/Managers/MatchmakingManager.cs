@@ -94,16 +94,8 @@ public class MatchmakingManager : MonoBehaviour
 
     private void Start()
     {
-        CheckServerMode();
-    }
-
-    private void Update()
-    {
-        CheckServerMode();
-    }
-
-    private void CheckServerMode()
-    {
+        // 서버 모드는 Awake에서 결정되므로 Start에서 1회만 진입.
+        // 매 프레임 체크는 불필요한 오버헤드.
         if (isDedicatedServerMode && !_isServerLoopRunning)
         {
             _isServerLoopRunning = true;
@@ -352,7 +344,7 @@ public class MatchmakingManager : MonoBehaviour
         OnMatchFound?.Invoke();
 
         AppNetworkManager.Instance?.ConnectToGameServer(ip, port);
-        StartCoroutine(LoadGameSceneDelay(2f));
+        // StartCoroutine(LoadGameSceneDelay(2f)); // 클라이언트가 혼자 씬을 다시 로드하면 네트코드 동기화가 깨지므로 삭제합니다.
     }
 
     private void HandleServerCancelledMatch()

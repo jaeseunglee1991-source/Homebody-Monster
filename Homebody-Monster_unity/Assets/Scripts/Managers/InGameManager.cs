@@ -204,6 +204,10 @@ public class InGameManager : MonoBehaviour
         }
         ShowStatusMessage("START!");
 
+        // 스폰 위치 배정은 NetworkSpawnManager가 서버 권한으로 단독 처리.
+        // 여기서 transform.position을 덮어쓰면 NGO 권한 모델과 충돌하고
+        // 클라이언트 측 실행 시 인원 수 불일치로 (0,0,0) 워프가 발생할 수 있음.
+
         foreach (var p in alivePlayers)
         {
             if (p != null && !p.IsDead)

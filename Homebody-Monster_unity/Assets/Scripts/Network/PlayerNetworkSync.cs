@@ -30,7 +30,7 @@ public struct NetworkCharacterData : INetworkSerializable
     {
         var d = new CharacterData
         {
-            job = (JobType)Job, affinity = (AffinityType)Affinity,
+            job = (JobType)Job, affinity = (AffinityType)Affinity, grade = (GradeTier)Grade,
             maxHp = MaxHp, currentHp = MaxHp, baseAtk = BaseAtk, moveSpeed = MoveSpeed,
             activeSkills = new List<ActiveSkillType>(), passiveSkills = new List<PassiveSkillType>(),
         };
@@ -108,7 +108,9 @@ public class PlayerNetworkSync : NetworkBehaviour
         if (IsOwner)
         {
             NetworkNickname.Value = new FixedString64Bytes(
-                GameManager.Instance?.currentPlayerId ?? $"Player_{OwnerClientId}");
+                GameManager.Instance?.currentPlayerNickname
+                ?? GameManager.Instance?.currentPlayerId
+                ?? $"Player_{OwnerClientId}");
             SubmitCharacterDataServerRpc(BuildNetworkData());
         }
 
@@ -131,10 +133,18 @@ public class PlayerNetworkSync : NetworkBehaviour
     //  NetworkVariable 콜백
     // ════════════════════════════════════════════════════════════
 
+    private bool _hudInitialized = false;
+
     private void HandleHpChanged(float prev, float curr)
     {
         if (_controller.myData != null) _controller.myData.currentHp = curr;
-        if (IsOwner) InGameHUD.Instance?.UpdateHealthBar(curr, NetworkMaxHp.Value);
+        if (!IsOwner) return;
+        if (!_hudInitialized && InGameHUD.Instance != null && _controller.myData != null)
+        {
+            InGameHUD.Instance.InitPlayerUI(_controller);
+            _hudInitialized = true;
+        }
+        InGameHUD.Instance?.UpdateHealthBar(curr, NetworkMaxHp.Value);
     }
 
     private void HandleDeadChanged(bool prev, bool curr) { }
@@ -149,9 +159,11 @@ public class PlayerNetworkSync : NetworkBehaviour
     private void SubmitCharacterDataServerRpc(NetworkCharacterData netData)
     {
         _serverData        = netData.ToCharacterData();
+        // 닉네임은 NetworkNickname을 통해 별도 동기화되므로 서버에서 주입
+        _serverData.playerName = NetworkNickname.Value.ToString();
         NetworkHp.Value    = _serverData.maxHp;
         NetworkMaxHp.Value = _serverData.maxHp;
-        Debug.Log($"[Server] 플레이어 {OwnerClientId} 데이터 수신 (HP:{_serverData.maxHp}, ATK:{_serverData.baseAtk})");
+        Debug.Log($"[Server] 플레이어 {OwnerClientId} ({_serverData.playerName}) 데이터 수신 (HP:{_serverData.maxHp}, ATK:{_serverData.baseAtk})");
     }
 
     [ServerRpc]
@@ -542,6 +554,36 @@ public class PlayerNetworkSync : NetworkBehaviour
         _controller.PlaySkillVisuals((ActiveSkillType)skillType, targetPos);
     }
 
+    /// <summary>caster 클라이언트(소유자)에게만 Lucky! 팝업 표시</summary>
+    public void ShowLuckyPopupOwner()
+    {
+        if (!IsServer) return;
+        var rpcParams = new ClientRpcParams
+        {
+            Send = new ClientRpcSendParams { TargetClientIds = new ulong[] { OwnerClientId } }
+        };
+        ShowLuckyPopupClientRpc(rpcParams);
+    }
+
+    [ClientRpc]
+    private void ShowLuckyPopupClientRpc(ClientRpcParams rpcParams = default)
+    {
+        _controller.ShowSkillPopup("Lucky!");
+    }
+
+    /// <summary>SnackTime — 모든 클라이언트에 caster의 디버프 즉시 해제 전파</summary>
+    public void BroadcastRemoveAllDebuffs()
+    {
+        if (!IsServer) return;
+        RemoveAllDebuffsClientRpc();
+    }
+
+    [ClientRpc]
+    private void RemoveAllDebuffsClientRpc()
+    {
+        _controller.StatusFX?.RemoveAllDebuffs();
+    }
+
     // ════════════════════════════════════════════════════════════
     //  내부 유틸
     // ════════════════════════════════════════════════════════════
@@ -569,7 +611,7 @@ public class PlayerNetworkSync : NetworkBehaviour
         if (d == null) { Debug.LogWarning("[PlayerNetworkSync] CharacterData 없음, 기본값 전송"); return default; }
         return new NetworkCharacterData
         {
-            Job = (int)d.job, Affinity = (int)d.affinity,
+            Job = (int)d.job, Affinity = (int)d.affinity, Grade = (int)d.grade,
             MaxHp = d.maxHp, BaseAtk = d.baseAtk, MoveSpeed = d.moveSpeed,
             Active0 = GetActive(d, 0), Active1 = GetActive(d, 1),
             Active2 = GetActive(d, 2), Active3 = GetActive(d, 3),

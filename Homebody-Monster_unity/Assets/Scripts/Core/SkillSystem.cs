@@ -562,11 +562,9 @@ public static class SkillSystem
     /// <summary>SnackTime — 서버에서 대상(caster)의 모든 디버프를 제거하고 클라이언트에 전파</summary>
     private static void BroadcastRemoveAllDebuffsServer(PlayerController caster)
     {
-        // StatusEffectSystem.RemoveAllDebuffs는 로컬 처리
-        // 클라이언트 동기화는 각 디버프 만료를 통해 자연스럽게 진행됨
-        // (디버프 지속시간을 0으로 설정하면 다음 TickEffects에서 자동 제거)
         caster.StatusFX.RemoveAllDebuffs();
-        // TODO: 필요 시 RemoveAllDebuffsClientRpc 추가로 즉각 전파 가능
+        // 모든 클라이언트에 즉시 전파 → 이동 잠금/스턴 등 시각 상태 동기 해제
+        caster.networkSync?.BroadcastRemoveAllDebuffs();
     }
 
     // ════════════════════════════════════════════════════════════
@@ -588,8 +586,8 @@ public static class SkillSystem
         if (cData.HasPassive(PassiveSkillType.LuckyStrike) && Random.value < 0.1f)
         {
             dmg *= 1.5f;
-            // 팝업은 caster 클라이언트에만 (로컬 시각 효과)
-            if (caster.networkSync.IsOwner) caster.ShowSkillPopup("Lucky!");
+            // 서버에서 caster 소유 클라이언트에게만 ClientRpc로 팝업 전파
+            caster.networkSync.ShowLuckyPopupOwner();
         }
 
         // 처형인 패시브 (HP 25% 이하 대상)

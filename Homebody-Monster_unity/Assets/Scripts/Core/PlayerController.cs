@@ -9,7 +9,8 @@ using Unity.Netcode;
 [RequireComponent(typeof(PlayerNetworkSync))]
 public class PlayerController : NetworkBehaviour
 {
-    [Header("Character Data")] public CharacterData myData;
+    [Header("Character Data")]
+    [field: SerializeField] public CharacterData myData { get; private set; }
     [Header("Input")] public VariableJoystick movementJoystick;
     [Header("Combat Settings")]
     public float attackRange = 1.8f;
@@ -54,13 +55,29 @@ public class PlayerController : NetworkBehaviour
     public override void OnNetworkSpawn()
     {
         base.OnNetworkSpawn();
-        // 동적 스폰 시 씬에 배치된 조이스틱을 자동으로 연결
-        if (IsOwner && movementJoystick == null)
-            movementJoystick = FindObjectOfType<VariableJoystick>();
+        if (IsOwner)
+        {
+            // 시네머신 카메라 자동 연결 (3.x 버전 대응 강화)
+            var vcam = FindFirstObjectByType<Unity.Cinemachine.CinemachineCamera>();
+            if (vcam != null)
+            {
+                vcam.Follow = transform;
+                Debug.Log($"[PlayerController] 🎥 시네머신 카메라 연결 성공: {vcam.name}");
+            }
+            else
+            {
+                Debug.LogWarning("[PlayerController] ⚠️ 씬에서 CinemachineCamera를 찾을 수 없습니다.");
+            }
+
+            // 동적 스폰 시 씬에 배치된 조이스틱을 자동으로 연결
+            if (movementJoystick == null)
+                movementJoystick = FindFirstObjectByType<VariableJoystick>();
+        }
     }
 
     private void Start()
-    {        if (myData == null && GameManager.Instance?.myCharacterData != null)
+    {
+        if (myData == null && GameManager.Instance?.myCharacterData != null)
             myData = GameManager.Instance.myCharacterData;
 
         // 등록은 PlayerNetworkSync.OnNetworkSpawn에서 수행하므로 중복 제거

@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.UI;
+using TMPro;
 using System.Collections;
 using System.Collections.Generic;
 
@@ -19,32 +20,32 @@ public class InGameHUD : MonoBehaviour
 
     [Header("체력 UI")]
     public Slider healthSlider;
-    public Text   healthText;
+    public TextMeshProUGUI   healthText;
 
     [Header("생존자 UI")]
-    public Text survivorCountText;
+    public TextMeshProUGUI survivorCountText;
 
     [Header("스킬 버튼 (최대 4개)")]
     public Button[] skillButtons;
     public Image[]  skillCooldownFills;
-    public Text[]   skillNameTexts;
+    public TextMeshProUGUI[]   skillNameTexts;
 
     [Header("타이머")]
-    public Text timerText;
+    public TextMeshProUGUI timerText;
 
     [Header("게임 종료 배너")]
     public GameObject endBannerPanel;
-    public Text       endBannerText;
+    public TextMeshProUGUI       endBannerText;
 
     [Header("부활 UI")]
     public GameObject      revivePanel;
-    public Text            reviveTimerText;
+    public TextMeshProUGUI            reviveTimerText;
     /// <summary>
     /// 부활 가능 여부 및 제한 사유를 표시하는 텍스트.
     /// Inspector에서 RevivePanel 하위에 배치하세요.
     /// 예: "남은 부활 횟수: 2/3  |  60초 제한 내 사용 가능"
     /// </summary>
-    public Text            reviveInfoText;
+    public TextMeshProUGUI            reviveInfoText;
     public Button          reviveButton;
     public Button          giveUpButton;
 
