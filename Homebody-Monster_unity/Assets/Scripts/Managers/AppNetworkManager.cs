@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Threading.Tasks;
 using UnityEngine;
 using Unity.Netcode;
@@ -18,7 +17,7 @@ public class AppNetworkManager : MonoBehaviour
 
     // ── 이벤트 ─────────────────────────────────────────────────
     public event Action<string>       OnChatReceived;
-    public event Action<List<string>> OnPlayerListUpdated;
+    public event Action<int>          OnPlayerListUpdated;   // 접속자 수만 전달 (상세 목록 불필요)
     public event Action               OnClientConnected;
     public event Action<string>       OnClientDisconnected;  // 파라미터: 연결 해제 사유
 
@@ -98,7 +97,9 @@ public class AppNetworkManager : MonoBehaviour
     {
         if (SupabaseManager.Instance != null)
         {
-            SupabaseManager.Instance.OnLobbyChatReceived -= HandleLobbyChatReceived;
+            SupabaseManager.Instance.OnLobbyChatReceived      -= HandleLobbyChatReceived;
+            SupabaseManager.Instance.OnLobbyPresenceCountChanged -= HandlePresenceCountChanged;
+            await SupabaseManager.Instance.UntrackLobbyPresence();
             await SupabaseManager.Instance.UnsubscribeLobbyChat();
         }
     }
@@ -109,26 +110,48 @@ public class AppNetworkManager : MonoBehaviour
 
     public async void ConnectToLobby()
     {
-        // 1. 접속자 목록 (현재 로컬만, 향후 Supabase Presence로 확장)
-        var players = new List<string> { GameManager.Instance?.currentPlayerId ?? "나" };
-        OnPlayerListUpdated?.Invoke(players);
-
-        // 2. Supabase Realtime 로비 채팅 채널 구독
         if (SupabaseManager.Instance != null && SupabaseManager.Instance.IsInitialized)
         {
-            SupabaseManager.Instance.OnLobbyChatReceived -= HandleLobbyChatReceived; // 중복 방지
-            SupabaseManager.Instance.OnLobbyChatReceived += HandleLobbyChatReceived;
+            SupabaseManager.Instance.OnLobbyChatReceived         -= HandleLobbyChatReceived;      // 중복 방지
+            SupabaseManager.Instance.OnLobbyChatReceived         += HandleLobbyChatReceived;
+            SupabaseManager.Instance.OnLobbyPresenceCountChanged -= HandlePresenceCountChanged;   // 중복 방지
+            SupabaseManager.Instance.OnLobbyPresenceCountChanged += HandlePresenceCountChanged;
             await SupabaseManager.Instance.SubscribeLobbyChat();
+
+            // 채널 구독 완료 후 닉네임이 이미 로드된 경우 즉시 Track
+            // (RefreshUserProfileUI가 먼저 끝난 경쟁 조건 방어)
+            string nickname = GameManager.Instance?.currentPlayerNickname;
+            if (!string.IsNullOrEmpty(nickname))
+                SupabaseManager.Instance.TrackLobbyPresence(nickname);
         }
         else
         {
-            Debug.LogWarning("[AppNetworkManager] Supabase 미초기화 — 로비 채팅 오프라인 모드");
+            Debug.LogWarning("[AppNetworkManager] Supabase 미초기화 — 로비 오프라인 모드");
+            OnPlayerListUpdated?.Invoke(1); // 오프라인 폴백
         }
+    }
+
+    /// <summary>
+    /// 닉네임 로드 완료 후 LobbyUIController.RefreshUserProfileUI()에서 호출합니다.
+    /// Supabase Presence에 현재 유저를 등록하여 접속자 수를 실시간 동기화합니다.
+    /// </summary>
+    public void TrackLobbyPresence(string nickname)
+    {
+        SupabaseManager.Instance?.TrackLobbyPresence(nickname);
+    }
+
+    private void HandlePresenceCountChanged(int count)
+    {
+        OnPlayerListUpdated?.Invoke(count);
     }
 
     /// <summary>Supabase Realtime에서 수신한 채팅 메시지를 LobbyUIController로 전달합니다.</summary>
     private void HandleLobbyChatReceived(string nickname, string message)
     {
+        // 내가 보낸 메시지는 이미 SendChatMessage에서 즉시 그렸으므로 무시 (중복 방지)
+        string myNickname = GameManager.Instance?.currentPlayerNickname;
+        if (!string.IsNullOrEmpty(myNickname) && nickname == myNickname) return;
+
         string formatted = $"[{nickname}]: {message}";
         OnChatReceived?.Invoke(formatted);
     }
@@ -139,7 +162,14 @@ public class AppNetworkManager : MonoBehaviour
 
     public async void SendChatMessage(string message)
     {
-        string nickname = GameManager.Instance?.currentPlayerId ?? "???";
+        // UID 대신 실제 닉네임 사용
+        string nickname = GameManager.Instance?.currentPlayerNickname;
+        if (string.IsNullOrEmpty(nickname))
+            nickname = GameManager.Instance?.currentPlayerId ?? "???"; // 닉네임 없으면 UID로 폴백
+
+        // [추가] 서버 전송보다 먼저 화면에 즉시 띄움 (로컬 에코 - 빠른 피드백)
+        string formatted = $"[{nickname}]: {message}";
+        OnChatReceived?.Invoke(formatted);
 
         if (SupabaseManager.Instance != null && SupabaseManager.Instance.IsLobbyChatSubscribed)
         {
@@ -149,12 +179,6 @@ public class AppNetworkManager : MonoBehaviour
                 // 전송 실패 시 로컬에만 안내 표시
                 OnChatReceived?.Invoke("[시스템]: 메시지 전송에 실패했습니다. 잠시 후 다시 시도해주세요.");
             }
-        }
-        else
-        {
-            // 오프라인 폴백: 로컬 에코만 수행
-            string formatted = $"[{nickname}]: {message}";
-            OnChatReceived?.Invoke(formatted);
         }
     }
 

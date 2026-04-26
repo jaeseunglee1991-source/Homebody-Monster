@@ -16,6 +16,7 @@ public class GameManager : MonoBehaviour
 
     [Header("Player Data")]
     public string currentPlayerId;
+    public string currentPlayerNickname; // 채팅 표시용 닉네임
     public CharacterData myCharacterData;
     public int reviveTicketCount = 0;
 

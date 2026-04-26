@@ -57,3 +57,6 @@ Homebody-Monster_unity/crashlytics_build_config.json
 *.apk
 *.aab
 *.unitypackage
+
+# ParrelSync Clones
+*_clone_*/

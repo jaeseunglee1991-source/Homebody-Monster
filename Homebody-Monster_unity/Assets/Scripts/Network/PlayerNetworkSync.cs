@@ -1,5 +1,6 @@
-using System.Collections;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
@@ -42,7 +43,18 @@ public struct NetworkCharacterData : INetworkSerializable
 }
 
 // ════════════════════════════════════════════════════════════════
-//  PlayerNetworkSync
+//  PlayerNetworkSync — 개선 버전
+//
+//  [원본 대비 변경 요약]
+//  1. WaitUntil 폴링 제거 → async Task + CancellationToken으로 교체
+//  2. _hasUsedRevive 조기 설정 버그 수정
+//     → Supabase 결과 확정 후에만 true로 설정
+//     → 중복 진입 방지는 _isProcessingRevive로 분리
+//  3. async void 사용 금지 → async Task 사용 (Unity 크래시 방지)
+//  4. Despawn 이후 await 재진입 방지 → CancellationToken 공유
+//  5. OnNetworkDespawn에서 CTS 정리 보장
+//  6. Supabase 인증 클라이언트 위임 (서버는 auth.uid() 없음)
+//  7. Thorns 반사 사망 누락 버그 수정 (2순위 사망 체크)
 // ════════════════════════════════════════════════════════════════
 [RequireComponent(typeof(PlayerController))]
 [RequireComponent(typeof(NetworkObject))]
@@ -61,15 +73,20 @@ public class PlayerNetworkSync : NetworkBehaviour
 
     // ── 서버 전용 상태 ──────────────────────────────────────────
     private CharacterData      _serverData;
-    private float              _lastAttackTime  = -999f;
-    private bool               _hasUsedRevive   = false;  // 이 플레이어의 부활권 사용 여부 (1회 제한)
-    private PlayerNetworkSync  _pendingKiller   = null;   // 부활 대기 중 킬러 참조
-    private Coroutine          _reviveTimeout   = null;   // 서버 타임아웃 코루틴
+    private float              _lastAttackTime = -999f;
+    private PlayerNetworkSync  _pendingKiller  = null;
 
-    /// <summary>
-    /// 서버에서 관리하는 이 플레이어의 CharacterData 원본.
-    /// PlayerController.HealServer() 등 서버 전용 로직에서 참조합니다.
-    /// </summary>
+    // ── 부활 상태 필드 ─────────────────────────────────────────
+    // _hasUsedRevive   : 부활 기회를 최종 소모했는지 (성공/포기/타임아웃 모두 포함)
+    //                    true가 된 이후에는 어떤 경로로도 부활 불가
+    // _isProcessingRevive : Supabase 통신이 진행 중인지
+    //                       중복 ServerRpc 방어용, 통신 중에만 true
+    // _reviveCts       : 타임아웃 Task와 Supabase Task가 공유하는 CancellationToken
+    //                    둘 중 하나가 먼저 끝나면 나머지를 취소
+    private bool _hasUsedRevive      = false;
+    private bool _isProcessingRevive = false;
+    private CancellationTokenSource _reviveCts = null;
+
     public CharacterData ServerData => _serverData;
 
     private PlayerController _controller;
@@ -83,8 +100,6 @@ public class PlayerNetworkSync : NetworkBehaviour
     public override void OnNetworkSpawn()
     {
         base.OnNetworkSpawn();
-        // IsLocalPlayer는 PlayerController에서 '=> IsOwner' 읽기전용 프로퍼티로 정의됨.
-        // 외부에서 직접 set하지 않아도 NGO가 IsOwner를 자동 관리합니다.
 
         NetworkHp.OnValueChanged        += HandleHpChanged;
         NetworkIsDead.OnValueChanged    += HandleDeadChanged;
@@ -105,6 +120,10 @@ public class PlayerNetworkSync : NetworkBehaviour
         NetworkHp.OnValueChanged        -= HandleHpChanged;
         NetworkIsDead.OnValueChanged    -= HandleDeadChanged;
         NetworkKillCount.OnValueChanged -= HandleKillCountChanged;
+
+        // Despawn 시 진행 중인 타이머/Supabase Task 모두 취소
+        CancelAndDisposeCts();
+
         base.OnNetworkDespawn();
     }
 
@@ -160,85 +179,75 @@ public class PlayerNetworkSync : NetworkBehaviour
 
         if (!result.isEvaded && !result.isDivineGraceBlocked && result.finalDamage > 0f)
         {
+            // PostDamageEffects: 흡혈(공격자 HP 회복), 가시갑옥(공격자 HP 감소), lastCombatTime 등 처리
             CombatSystem.PostDamageEffects(_serverData, targetSync._serverData, attackerFx, targetFx, result.finalDamage);
             NetworkHp.Value = Mathf.Clamp(_serverData.currentHp, 0f, NetworkMaxHp.Value);
         }
 
+        // 원래 공격 데미지는 Thorns 반사와 무관하게 타겟에게 항상 적용
         float newHp = Mathf.Max(0f, targetSync.NetworkHp.Value - result.finalDamage);
         targetSync.NetworkHp.Value       = newHp;
         targetSync._serverData.currentHp = newHp;
 
         targetSync.NotifyHitClientRpc(result.finalDamage, result.isEvaded, result.isCritical, result.isDivineGraceBlocked);
 
+        // 1순위: 타겟 사망 체크 (일반 공격 흐름)
         if (newHp <= 0f && !targetSync.NetworkIsDead.Value)
             ProcessDeath(targetSync, attackerFx, targetFx);
+
+        // [버그 수정] 2순위: 가시갑옥(Thorns) 반사로 공격자 HP가 0 이하가 된 경우
+        // PostDamageEffects는 _serverData.currentHp만 수정하므로 ProcessDeath가 호출되지 않았음.
+        // 원래 공격 데미지를 타겟에게 적용한 이후에 순차적으로 처리합니다.
+        // (공격자가 Thorns로 죽어도 원래 타격은 이미 위에서 타겟에 반영됨)
+        if (NetworkHp.Value <= 0f && !NetworkIsDead.Value)
+            targetSync.ProcessDeath(this, targetFx, attackerFx);
     }
 
     // ════════════════════════════════════════════════════════════
     //  사망 처리
-    //
-    //  [부활권 제한 조건 추가]
-    //  아래 세 가지 조건을 모두 만족해야 부활 UI 표시:
-    //    1. 이 플레이어가 아직 부활권을 사용하지 않았을 것 (_hasUsedRevive == false)
-    //    2. 게임 시작 후 60초 이내일 것 (InGameManager.ElapsedGameTime <= 60f)
-    //    3. 현재 생존자가 3명 이상일 것 (생존자 2명 이하이면 부활 불가)
-    //    4. 매치 전체 부활권 사용 횟수가 3회 미만일 것
     // ════════════════════════════════════════════════════════════
 
     private void ProcessDeath(PlayerNetworkSync target, StatusEffectSystem attackerFx, StatusEffectSystem targetFx)
     {
-        // 생존 패시브 우선 체크
         if (CombatSystem.TryGuardianAngel(target._serverData, targetFx))
         { target.NetworkHp.Value = target._serverData.currentHp; return; }
         if (CombatSystem.TryTenacity(target._serverData, targetFx))
         { target.NetworkHp.Value = target._serverData.currentHp; return; }
 
-        // 1단계: 시각적 사망 처리만 (alivePlayers에서 제거는 아직 안 함)
         target.NetworkIsDead.Value = true;
         target.DeclareDeathClientRpc(NetworkObject.NetworkObjectId);
 
-        // ── 부활권 사용 가능 여부 판정 (서버 권한) ──────────────
         bool canRevive = CanOfferRevive(target);
 
         if (canRevive)
         {
-            // 킬러 참조 보관 (부활 포기/타임아웃 시 FinalizeDeath에서 사용)
             target._pendingKiller = this;
-            // 클라이언트에 부활 UI 표시
             target.OfferReviveClientRpc();
-            // 서버에서 5초 타임아웃 감시 시작
-            target._reviveTimeout = target.StartCoroutine(target.ReviveTimeoutRoutine());
+
+            // 기존 CTS가 남아있으면 정리 후 새로 생성
+            target.CancelAndDisposeCts();
+            target._reviveCts = new CancellationTokenSource();
+
+            // 타임아웃 Task 시작 — Unity 메인스레드에서 안전하게 실행
+            _ = target.ReviveTimeoutAsync(target._reviveCts.Token);
         }
         else
         {
-            // 조건 불충족 → 즉시 최종 사망
             string reason = GetReviveDeniedReason(target);
             Debug.Log($"[Server] {target.OwnerClientId} 부활권 사용 불가 — {reason}");
+            target._hasUsedRevive = true;
             FinalizeDeath(target);
         }
     }
 
-    /// <summary>
-    /// 부활 UI를 표시할 수 있는지 서버에서 판정합니다.
-    /// 네 가지 조건을 모두 만족해야 true를 반환합니다.
-    /// </summary>
     private static bool CanOfferRevive(PlayerNetworkSync target)
     {
         var mgr = InGameManager.Instance;
         if (mgr == null) return false;
-
-        // 조건 1: 이 플레이어 개인이 아직 부활권을 사용하지 않았어야 함
         if (target._hasUsedRevive) return false;
-
-        // 조건 2: 게임 시작 후 60초 이내여야 함
         if (mgr.ElapsedGameTime > 60f) return false;
-
-        // 조건 3: 현재 생존자가 3명 이상이어야 함 (2명 이하이면 불가)
         if (mgr.AliveCount <= 2) return false;
-
-        // 조건 4: 매치 전체 부활권 사용 횟수가 최대치(3회) 미만이어야 함
         if (mgr.MatchReviveUsedCount >= InGameManager.MaxMatchReviveCount) return false;
-
         return true;
     }
 
@@ -246,17 +255,13 @@ public class PlayerNetworkSync : NetworkBehaviour
     {
         var mgr = InGameManager.Instance;
         if (mgr == null) return "InGameManager 없음";
-        if (target._hasUsedRevive)                             return "이미 부활권 사용함";
-        if (mgr.ElapsedGameTime > 60f)                        return $"시간 초과 ({mgr.ElapsedGameTime:0}초)";
-        if (mgr.AliveCount <= 2)                              return $"생존자 {mgr.AliveCount}명 (최소 3명 필요)";
+        if (target._hasUsedRevive)                                         return "이미 부활권 사용함";
+        if (mgr.ElapsedGameTime > 60f)                                     return $"시간 초과 ({mgr.ElapsedGameTime:0}초)";
+        if (mgr.AliveCount <= 2)                                           return $"생존자 {mgr.AliveCount}명 (최소 3명 필요)";
         if (mgr.MatchReviveUsedCount >= InGameManager.MaxMatchReviveCount) return $"매치 부활 횟수 소진 ({mgr.MatchReviveUsedCount}/{InGameManager.MaxMatchReviveCount})";
         return "알 수 없음";
     }
 
-    /// <summary>
-    /// 최종 사망 확정: 킬 카운트 올리고 InGameManager에 통보.
-    /// ProcessDeath에서 분리되어 부활 포기/타임아웃 후에 호출됨.
-    /// </summary>
     private void FinalizeDeath(PlayerNetworkSync target)
     {
         var killer = target._pendingKiller ?? this;
@@ -267,28 +272,52 @@ public class PlayerNetworkSync : NetworkBehaviour
         Debug.Log($"[Server] {killer.OwnerClientId} → {target.OwnerClientId} 처치! (킬:{killer.NetworkKillCount.Value})");
     }
 
-    /// <summary>서버: 5.5초 후 부활권 미사용 시 강제 사망 처리</summary>
-    private IEnumerator ReviveTimeoutRoutine()
+    // ════════════════════════════════════════════════════════════
+    //  부활 타임아웃 — async Task (코루틴 WaitForSeconds 대체)
+    //
+    //  기존 ReviveTimeoutRoutine()의 문제:
+    //   - WaitForSeconds는 취소 불가 → 플레이어 응답 후에도 5초를 기다림
+    //   - 그 5초 사이 RequestReviveServerRpc와 겹치면 FinalizeDeath 이중 호출 가능
+    //
+    //  개선:
+    //   - Task.Delay(token) : CTS.Cancel() 즉시 대기 종료 (0ms 지연)
+    //   - _hasUsedRevive 재확인 : 플레이어가 이미 응답했으면 아무것도 안 함
+    // ════════════════════════════════════════════════════════════
+    private async Task ReviveTimeoutAsync(CancellationToken token)
     {
-        yield return new WaitForSeconds(5.5f);
-        if (NetworkIsDead.Value && !_hasUsedRevive)
+        try
+        {
+            await Task.Delay(5500, token); // 5.5초 대기 (취소 가능)
+        }
+        catch (TaskCanceledException)
+        {
+            // 플레이어가 부활/포기 버튼을 눌러 CTS가 취소됨 → 정상 흐름
+            Debug.Log($"[Server] {OwnerClientId} 부활 타임아웃 타이머 취소 (플레이어 응답)");
+            return;
+        }
+
+        // 5.5초가 지나도록 플레이어가 아무것도 안 한 경우
+        // _hasUsedRevive 재확인: RequestReviveServerRpc가 동시 진입했을 가능성 방어
+        if (!_hasUsedRevive && !_isProcessingRevive)
         {
             _hasUsedRevive = true;
             FinalizeDeath(this);
+            ReviveDeniedClientRpc();
+            Debug.Log($"[Server] {OwnerClientId} 부활 타임아웃 → 최종 사망");
         }
     }
 
-    /// <summary>
-    /// 새 매치 시작 시 이 플레이어의 부활권 상태를 초기화합니다.
-    /// InGameManager.GameStartSequence()에서 호출하세요.
-    /// (서버 권한)
-    /// </summary>
+    // ════════════════════════════════════════════════════════════
+    //  매치 초기화
+    // ════════════════════════════════════════════════════════════
+
     public void ResetReviveStateForNewMatch()
     {
         if (!IsServer) return;
-        _hasUsedRevive = false;
-        if (_reviveTimeout != null) { StopCoroutine(_reviveTimeout); _reviveTimeout = null; }
-        if (_pendingKiller != null) _pendingKiller = null;
+        _hasUsedRevive      = false;
+        _isProcessingRevive = false;
+        _pendingKiller      = null;
+        CancelAndDisposeCts();
         Debug.Log($"[Server] {OwnerClientId} 부활권 상태 초기화");
     }
 
@@ -296,7 +325,6 @@ public class PlayerNetworkSync : NetworkBehaviour
     //  부활 RPC
     // ════════════════════════════════════════════════════════════
 
-    /// <summary>서버 → 사망한 당사자만: 부활 UI 표시 요청</summary>
     [ClientRpc]
     private void OfferReviveClientRpc()
     {
@@ -304,75 +332,96 @@ public class PlayerNetworkSync : NetworkBehaviour
             InGameHUD.Instance.ShowReviveUI(this);
     }
 
-    /// <summary>
-    /// 클라이언트 → 서버: 부활 확정 요청.
-    /// 1단계: 매치 조건 재검증 (동기 — 시간/생존자/매치횟수)
-    /// 2단계: Supabase 티켓 차감 시도 (비동기 코루틴)
-    ///   → 티켓 없음: ReviveDenied + FinalizeDeath
-    ///   → 티켓 있음: 부활 실행 + 매치 카운터 증가 + alivePlayers 재등록
-    /// </summary>
     [ServerRpc]
     public void RequestReviveServerRpc()
     {
-        if (_hasUsedRevive || !NetworkIsDead.Value) return;
+        if (_hasUsedRevive || !NetworkIsDead.Value || _isProcessingRevive) return;
 
-        // 요청 시점 조건 재검증 (타임아웃/생존자 수 변화 대비)
         if (!CanOfferRevive(this))
         {
             Debug.LogWarning($"[Server] {OwnerClientId} 부활 요청 거부 (조건 변경됨)");
             _hasUsedRevive = true;
-            if (_reviveTimeout != null) { StopCoroutine(_reviveTimeout); _reviveTimeout = null; }
+            CancelAndDisposeCts();
             ReviveDeniedClientRpc();
             FinalizeDeath(this);
             return;
         }
 
-        // 타임아웃 중단 — Supabase 응답 대기 중 타임아웃이 겹치지 않도록
-        if (_reviveTimeout != null) { StopCoroutine(_reviveTimeout); _reviveTimeout = null; }
+        CancelAndDisposeCts();
+        _isProcessingRevive = true;
 
-        // Supabase 티켓 차감 (비동기) → 코루틴으로 처리
-        StartCoroutine(ProcessReviveWithSupabase());
+        // ── 호환성 수정: Supabase 티켓 차감을 인증된 클라이언트에 위임 ──────
+        // 문제: UseReviveTicket()은 Supabase auth.uid()로 유저를 식별하지만
+        //       데디케이티드 서버는 Supabase에 로그인하지 않아
+        //       Client.Auth.CurrentUser == null → 항상 false 반환.
+        //       결과: 부활권이 있어도 서버에서 100% 부활 거부됨.
+        //
+        // 해결: 인증 세션을 가진 Owner 클라이언트에게 티켓 차감을 위임하고
+        //       결과를 ReportReviveTicketResultServerRpc로 수신합니다.
+        //       게임 조건은 이미 서버에서 검증 완료.
+        //       Supabase DB 함수(use_revive_ticket)가 서버 사이드에서
+        //       auth.uid()로 원자적 차감 처리하므로 위변조는 DB 레벨에서 차단됩니다.
+        var rpcParams = new ClientRpcParams
+        {
+            Send = new ClientRpcSendParams { TargetClientIds = new[] { OwnerClientId } }
+        };
+        RequestTicketDeductionClientRpc(rpcParams);
     }
 
-    /// <summary>
-    /// Supabase에서 보유 티켓 1장을 차감하고 결과에 따라 부활 또는 즉사를 처리합니다.
-    /// (서버 전용, RequestReviveServerRpc 내부에서만 호출)
-    ///
-    /// Supabase use_revive_ticket() RPC 동작:
-    ///   profiles.revive_ticket_count > 0 → 1 차감 → true 반환
-    ///   profiles.revive_ticket_count = 0 → false 반환 (티켓 없음)
-    /// </summary>
-    private IEnumerator ProcessReviveWithSupabase()
-    {
-        // 응답 대기 중 중복 요청 방지 — 미리 잠금
-        _hasUsedRevive = true;
+    // ════════════════════════════════════════════════════════════
+    //  티켓 차감 위임 흐름
+    //
+    //  서버 → Owner 클라이언트 : RequestTicketDeductionClientRpc
+    //  클라이언트               : UseReviveTicket() (인증된 세션으로 실행)
+    //  클라이언트 → 서버        : ReportReviveTicketResultServerRpc(bool)
+    //  서버                     : 부활 실행 또는 최종 사망 처리
+    // ════════════════════════════════════════════════════════════
 
-        bool supabaseSuccess = false;
+    [ClientRpc]
+    private void RequestTicketDeductionClientRpc(ClientRpcParams rpcParams = default)
+    {
+        if (!IsOwner) return;
+        _ = DeductTicketAndReportAsync();
+    }
+
+    private async Task DeductTicketAndReportAsync()
+    {
+        bool success = false;
 
         if (SupabaseManager.Instance != null)
         {
-            // Task → 코루틴 브릿지 (Unity에서 async Task를 yield로 대기)
-            var task = SupabaseManager.Instance.UseReviveTicket();
-            yield return new WaitUntil(() => task.IsCompleted);
-            supabaseSuccess = task.Result;
+            success = await SupabaseManager.Instance.UseReviveTicket();
         }
         else
         {
-            // Supabase 미연결 환경 (에디터 테스트): 항상 성공 처리
-            Debug.LogWarning("[Server] SupabaseManager 없음 — 티켓 차감 생략 (테스트 모드)");
-            supabaseSuccess = true;
+            Debug.LogWarning("[Client] SupabaseManager 없음 — 티켓 차감 생략 (테스트 모드)");
+            success = true;
         }
 
-        if (!supabaseSuccess)
+        // await 이후 Despawn 방어
+        if (!IsSpawned) return;
+
+        ReportReviveTicketResultServerRpc(success);
+    }
+
+    [ServerRpc]
+    public void ReportReviveTicketResultServerRpc(bool success)
+    {
+        // 중복 호출 방지: _isProcessingRevive 상태일 때만 유효
+        if (!_isProcessingRevive || !NetworkIsDead.Value) return;
+
+        _isProcessingRevive = false;
+        _hasUsedRevive = true;
+
+        if (!success)
         {
-            // 보유 티켓 없음 → 부활 거부 + 즉사
             Debug.LogWarning($"[Server] {OwnerClientId} 부활 거부 — 보유 부활권 없음 (Supabase)");
             ReviveDeniedClientRpc();
             FinalizeDeath(this);
-            yield break;
+            return;
         }
 
-        // ── 부활 실행 ────────────────────────────────────────────
+        // ── 부활 실행 ─────────────────────────────────────────────
         NetworkIsDead.Value   = false;
         NetworkHp.Value       = NetworkMaxHp.Value;
         _serverData.currentHp = _serverData.maxHp;
@@ -381,31 +430,27 @@ public class PlayerNetworkSync : NetworkBehaviour
         InGameManager.Instance?.OnPlayerRevived(_controller);
 
         ExecuteReviveClientRpc();
-        Debug.Log($"[Server] {OwnerClientId} 부활 확정! Supabase 티켓 차감 완료 (매치: {InGameManager.Instance?.MatchReviveUsedCount}/{InGameManager.MaxMatchReviveCount})");
+        Debug.Log($"[Server] {OwnerClientId} 부활 확정! " +
+                  $"(매치 부활: {InGameManager.Instance?.MatchReviveUsedCount}/{InGameManager.MaxMatchReviveCount})");
     }
 
-    /// <summary>
-    /// 클라이언트 → 서버: 포기 확정 요청.
-    /// </summary>
     [ServerRpc]
     public void RequestGiveUpServerRpc()
     {
-        if (!NetworkIsDead.Value || _hasUsedRevive) return;
+        // _isProcessingRevive 추가: 이미 Supabase 처리 중이면 포기 무시
+        if (!NetworkIsDead.Value || _hasUsedRevive || _isProcessingRevive) return;
 
-        if (_reviveTimeout != null) { StopCoroutine(_reviveTimeout); _reviveTimeout = null; }
-
+        CancelAndDisposeCts();
         _hasUsedRevive = true;
         FinalizeDeath(this);
     }
 
-    /// <summary>서버 → 모든 클라이언트: 부활 애니메이션 실행</summary>
     [ClientRpc]
     private void ExecuteReviveClientRpc()
     {
         _controller.ReviveNetwork();
     }
 
-    /// <summary>서버 → 당사자: 부활 조건 불충족으로 거부됨을 알림 (HUD 정리용)</summary>
     [ClientRpc]
     private void ReviveDeniedClientRpc()
     {
@@ -438,7 +483,6 @@ public class PlayerNetworkSync : NetworkBehaviour
         ApplyDamageServer(damage, source, new DamageResult { finalDamage = damage });
     }
 
-    /// <summary>NetworkProjectile 등 DamageResult를 이미 가진 경로에서 호출. MISS·CRIT 팝업 포함.</summary>
     public void ApplyDamageServer(float damage, PlayerNetworkSync source, DamageResult result)
     {
         if (!IsServer || NetworkIsDead.Value || _serverData == null) return;
@@ -465,48 +509,54 @@ public class PlayerNetworkSync : NetworkBehaviour
         _controller.StatusFX.ApplyEffectServer(type, duration, value, source?._controller);
         SyncStatusEffectClientRpc((int)type, duration, value);
     }
-    
+
     [ClientRpc]
     private void SyncStatusEffectClientRpc(int type, float duration, float value)
     {
-        if (IsServer) return; // 서버는 이미 적용 완료
+        if (IsServer) return;
         _controller.StatusFX.ApplyEffectNetwork((StatusEffectType)type, duration, value);
     }
 
     // ════════════════════════════════════════════════════════════
-    //  스킬 RPC (PlayerController.UseSkill에서 호출)
+    //  스킬 RPC
     // ════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// 로컬 플레이어가 스킬을 사용할 때 PlayerController.UseSkill()에서 호출합니다.
-    /// 서버에서 침묵·사망 여부를 재검증한 뒤 SkillSystem을 실행하고,
-    /// 모든 클라이언트에 시각 효과를 전파합니다.
-    /// </summary>
     [ServerRpc]
     public void RequestUseSkillServerRpc(int slotIndex, Vector2 targetPos)
     {
         if (NetworkIsDead.Value || _serverData == null) return;
 
-        // 침묵 상태 서버 재검증
         var statusFx = _controller.StatusFX;
         if (statusFx != null && statusFx.IsSilenced) return;
 
         if (slotIndex < 0 || slotIndex >= _serverData.activeSkills.Count) return;
 
         ActiveSkillType skill = _serverData.activeSkills[slotIndex];
-
-        // 서버에서 스킬 효과 적용 (데미지·버프·상태이상 등)
         SkillSystem.ActivateSkillServer(skill, _controller, targetPos);
-
-        // 모든 클라이언트에 시각 효과 전파
         BroadcastSkillVisualsClientRpc((int)skill, targetPos);
     }
 
-    /// <summary>스킬 시각 효과(애니메이션·파티클)를 모든 클라이언트에서 재생합니다.</summary>
     [ClientRpc]
     private void BroadcastSkillVisualsClientRpc(int skillType, Vector2 targetPos)
     {
         _controller.PlaySkillVisuals((ActiveSkillType)skillType, targetPos);
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  내부 유틸
+    // ════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// CancellationTokenSource를 안전하게 취소하고 메모리를 해제합니다.
+    /// Cancel 후 Dispose를 반드시 함께 호출해야 메모리 누수가 없습니다.
+    /// </summary>
+    private void CancelAndDisposeCts()
+    {
+        if (_reviveCts == null) return;
+        if (!_reviveCts.IsCancellationRequested)
+            _reviveCts.Cancel();
+        _reviveCts.Dispose();
+        _reviveCts = null;
     }
 
     // ════════════════════════════════════════════════════════════

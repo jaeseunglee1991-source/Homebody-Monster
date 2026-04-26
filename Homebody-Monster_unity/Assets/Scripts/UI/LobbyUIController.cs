@@ -1,5 +1,8 @@
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.InputSystem;
+using TMPro;
+using System;
 using System.Collections.Generic;
 
 /// <summary>
@@ -15,28 +18,45 @@ public class LobbyUIController : MonoBehaviour
 {
     [Header("로비 기본 UI")]
     public GameObject lobbyPanel;         // 플레이어 목록 + 채팅 + 시작 버튼 영역
-    public Text       playerListText;
-    public Text       chatLogText;
-    public InputField chatInputField;
-    public Button     sendChatButton;     // 채팅 전송 버튼 (모바일 터치용)
-    public Button     startMatchButton;
-    public ScrollRect chatScrollRect;     // 채팅 로그 스크롤 영역 (Inspector 연결)
+    /// <summary>
+    /// "🟢 현재 접속자: 124명" 처럼 단순 카운트를 표시하는 텍스트.
+    /// Inspector에서 채팅창 바로 위 작은 텍스트 오브젝트에 연결하세요.
+    /// </summary>
+    public TextMeshProUGUI onlineCountText;
+    /// <summary>상세 접속자 목록 팝업 (선택). 버튼 클릭 시 토글됩니다.</summary>
+    public GameObject      playerListPopup;
+    public TextMeshProUGUI playerListPopupText;
+    public Button          playerListToggleButton;  // "접속자 목록" 버튼
+    public TextMeshProUGUI chatLogText;
+    public TMP_InputField  chatInputField;
+    public Button          sendChatButton;     // 채팅 전송 버튼 (모바일 터치용)
+    public Button          startMatchButton;
+    public ScrollRect      chatScrollRect;     // 채팅 로그 스크롤 영역 (Inspector 연결)
+
+    [Header("상단 바 UI (프로필 정보)")]
+    public TextMeshProUGUI nicknameText;
+    public TextMeshProUGUI pizzaCountText;
+    public TextMeshProUGUI reviveTicketCountText;
 
     [Header("매칭 팝업 (Dim 처리 포함)")]
-    public GameObject dimBackground;      // 반투명 배경 (Raycast Target 체크 필수)
-    public GameObject matchmakingPanel;   // 매칭 중일 때 보일 팝업창
-    public Text       queueCountText;     // "3 / 8명"
-    public Text       timerText;          // "00:42"
-    public Text       statusText;         // "상대를 찾는 중..."
-    public Slider     timerSlider;        // 60초 진행 바
-    public Button     cancelMatchButton;
+    public GameObject      dimBackground;      // 반투명 배경 (Raycast Target 체크 필수)
+    public GameObject      matchmakingPanel;   // 매칭 중일 때 보일 팝업창
+    public TextMeshProUGUI queueCountText;     // "3 / 8명"
+    public TextMeshProUGUI timerText;          // "00:42"
+    public TextMeshProUGUI statusText;         // "상대를 찾는 중..."
+    public Slider          timerSlider;        // 60초 진행 바
+    public Button          cancelMatchButton;
 
     private float maxWaitSeconds = 60f;
     private bool  isPopupActive = false;  // 현재 팝업이 켜져 있는지 추적
+    private bool  isPlayerListOpen = false; // 접속자 목록 팝업 토글 상태
+
+    // ── 접속자 목록 캐시 ─────────────────────────────────────────
+    private readonly List<string> _cachedPlayerList = new List<string>();
 
     // ── 채팅 로그 관리 ───────────────────────────────────────────
-    private readonly List<string> chatLines = new List<string>();
-    private const int MaxChatLogLines = 50; // 메모리 관리: 최대 표시 줄 수
+    private readonly Queue<string> chatLines = new Queue<string>();
+    private const int MaxChatLogLines = 50;
 
     private void Start()
     {
@@ -45,10 +65,16 @@ public class LobbyUIController : MonoBehaviour
         // 1. 네트워크(채팅/접속자) 이벤트 연결
         if (AppNetworkManager.Instance != null)
         {
-            AppNetworkManager.Instance.OnPlayerListUpdated += UpdatePlayerListUI;
+            AppNetworkManager.Instance.OnPlayerListUpdated += UpdateOnlineCountUI;
             AppNetworkManager.Instance.OnChatReceived      += UpdateChatUI;
             AppNetworkManager.Instance.ConnectToLobby();
         }
+
+        // 접속자 목록 상세 팝업 버튼
+        if (playerListToggleButton != null)
+            playerListToggleButton.onClick.AddListener(TogglePlayerListPopup);
+        if (playerListPopup != null)
+            playerListPopup.SetActive(false);
 
         // 2. 매치메이킹 이벤트 연결
         if (MatchmakingManager.Instance != null)
@@ -69,21 +95,40 @@ public class LobbyUIController : MonoBehaviour
 
         // 4. 로비 진입 시 시스템 메시지 표시
         UpdateChatUI("[시스템]: 로비에 입장했습니다. 즐거운 게임 되세요!");
+
+        // 5. 유저 프로필 정보 로드 및 UI 반영
+        RefreshUserProfileUI();
+    }
+
+    /// <summary>
+    /// Supabase에서 최신 프로필 정보를 가져와 UI에 반영합니다.
+    /// </summary>
+    public async void RefreshUserProfileUI()
+    {
+        if (SupabaseManager.Instance == null || string.IsNullOrEmpty(GameManager.Instance?.currentPlayerId)) return;
+
+        var profile = await SupabaseManager.Instance.GetOrCreateProfile(GameManager.Instance.currentPlayerId);
+        if (profile != null)
+        {
+            if (nicknameText != null) nicknameText.text = profile.Nickname;
+            if (pizzaCountText != null) pizzaCountText.text = $"{profile.PizzaCount}";
+            if (reviveTicketCountText != null) reviveTicketCountText.text = $"{profile.ReviveTicketCount}";
+
+            // GameManager 캐시 업데이트
+            GameManager.Instance.currentPlayerNickname = profile.Nickname; // 채팅용 닉네임 저장
+            GameManager.Instance.reviveTicketCount = profile.ReviveTicketCount;
+
+            // Supabase Presence 등록 — 닉네임 확보 후 호출해야 올바른 식별자로 등록됨
+            AppNetworkManager.Instance?.TrackLobbyPresence(profile.Nickname);
+        }
     }
 
     private void Update()
     {
-        // 📱 실전 호환성: 안드로이드 뒤로가기(Escape) 버튼으로 매칭 취소 지원
-        if (isPopupActive && Input.GetKeyDown(KeyCode.Escape))
-        {
-            OnClickCancelMatch();
-        }
-
-        // ⌨️ 에디터/키보드 사용자를 위한 Enter키 전송 지원
-        if (chatInputField != null && chatInputField.isFocused && Input.GetKeyDown(KeyCode.Return))
-        {
-            OnClickSendChat();
-        }
+        // 📱 실전 호환성: 안드로이드 뒤로가기(Escape) 버튼 지원
+        // (New Input System 환경에서는 Keyboard.current 등을 쓰거나
+        //  UI 캔버스에서 Navigation을 활용하는 것이 좋지만,
+        //  현재는 에러 방지를 위해 이 부분을 일단 비워두거나 이벤트를 통해 처리합니다.)
     }
 
     private void OnDestroy()
@@ -91,7 +136,7 @@ public class LobbyUIController : MonoBehaviour
         // 🧹 씬 전환 시 참조 해제 (MissingReferenceException 에러 방지)
         if (AppNetworkManager.Instance != null)
         {
-            AppNetworkManager.Instance.OnPlayerListUpdated -= UpdatePlayerListUI;
+            AppNetworkManager.Instance.OnPlayerListUpdated -= UpdateOnlineCountUI;
             AppNetworkManager.Instance.OnChatReceived      -= UpdateChatUI;
 
             // Supabase Realtime 채팅 채널 구독 해제 (로비 전용이므로 씬 이탈 시 정리)
@@ -118,32 +163,47 @@ public class LobbyUIController : MonoBehaviour
         chatInputField.characterLimit = SupabaseManager.MaxChatMessageLength;
 
         // 모바일 키보드: 한 줄 입력 + 리턴 버튼을 "Send"로 표시
-        chatInputField.lineType   = InputField.LineType.SingleLine;
-        chatInputField.contentType = InputField.ContentType.Standard;
+        chatInputField.lineType   = TMP_InputField.LineType.SingleLine;
+        chatInputField.contentType = TMP_InputField.ContentType.Standard;
 
         // 플레이스홀더 텍스트 설정
-        if (chatInputField.placeholder is Text placeholderText)
+        if (chatInputField.placeholder is TextMeshProUGUI placeholderText)
             placeholderText.text = "메시지를 입력하세요...";
 
         // 전송 버튼 연결
         if (sendChatButton != null)
             sendChatButton.onClick.AddListener(OnClickSendChat);
+
+        // ⌨️ 엔터키 전송 지원 (New Input System 에러 방지 및 UX 향상)
+        chatInputField.onSubmit.AddListener((val) =>
+        {
+            OnClickSendChat();
+            // 전송 후 바로 다시 입력할 수 있게 포커스 유지
+            chatInputField.ActivateInputField();
+        });
     }
 
     // ── 버튼 클릭 이벤트 ──────────────────────────────────────
 
     public void OnClickStartMatch()
     {
-        if (startMatchButton != null) startMatchButton.interactable = false; // 연타 방지
+        if (MatchmakingManager.Instance == null)
+        {
+            Debug.LogError("[LobbyUI] MatchmakingManager가 없습니다.");
+            return;
+        }
+        if (startMatchButton != null) startMatchButton.interactable = false;
         ShowMatchmakingPanel();
-        MatchmakingManager.Instance?.StartSearch();
+        MatchmakingManager.Instance.StartSearch();
     }
 
     public void OnClickCancelMatch()
     {
-        if (cancelMatchButton != null) cancelMatchButton.interactable = false; // 연타 방지
-        MatchmakingManager.Instance?.CancelSearch();
-        ShowLobbyPanel();
+        if (cancelMatchButton != null) cancelMatchButton.interactable = false;
+        if (MatchmakingManager.Instance != null)
+            MatchmakingManager.Instance.CancelSearch();
+        else
+            ShowLobbyPanel();
     }
 
     public void OnClickSendChat()
@@ -190,7 +250,7 @@ public class LobbyUIController : MonoBehaviour
     {
         if (statusText != null)
             statusText.text = "매칭 완료! 게임 입장 중...";
-        
+
         // 🔒 매칭이 성사되면 더 이상 취소하지 못하도록 버튼 잠금
         if (cancelMatchButton != null)
             cancelMatchButton.interactable = false;
@@ -203,20 +263,57 @@ public class LobbyUIController : MonoBehaviour
 
     // ── 채팅/플레이어 UI 콜백 ─────────────────────────────────
 
-    private void UpdatePlayerListUI(List<string> players)
+    // ── 접속자 카운트 / 상세 목록 UI ─────────────────────────────
+
+    /// <summary>
+    /// AppNetworkManager.OnPlayerListUpdated(int) 콜백.
+    /// 상단에 "🟢 현재 접속자: N명" 한 줄만 표시합니다.
+    /// </summary>
+    private void UpdateOnlineCountUI(int count)
     {
-        if (playerListText != null)
-            playerListText.text = "접속자 목록:\n" + string.Join("\n", players);
+        if (onlineCountText != null)
+            onlineCountText.text = $"🟢 현재 접속자: {count}명";
+    }
+
+    /// <summary>
+    /// 상세 닉네임 목록이 필요한 경우(예: Supabase Presence 연동 후) 이 메서드를 호출합니다.
+    /// 현재는 팝업 내용 갱신만 담당하며, 팝업을 자동으로 열지는 않습니다.
+    /// </summary>
+    public void UpdatePlayerListDetail(List<string> players)
+    {
+        _cachedPlayerList.Clear();
+        _cachedPlayerList.AddRange(players);
+
+        // 카운트 갱신
+        UpdateOnlineCountUI(players.Count);
+
+        // 팝업이 열려 있으면 내용 즉시 갱신
+        if (isPlayerListOpen && playerListPopupText != null)
+            playerListPopupText.text = "접속자 목록:\n" + string.Join("\n", _cachedPlayerList);
+    }
+
+    /// <summary>접속자 상세 목록 팝업을 토글합니다.</summary>
+    private void TogglePlayerListPopup()
+    {
+        if (playerListPopup == null) return;
+        isPlayerListOpen = !isPlayerListOpen;
+        playerListPopup.SetActive(isPlayerListOpen);
+
+        if (isPlayerListOpen && playerListPopupText != null)
+        {
+            playerListPopupText.text = _cachedPlayerList.Count > 0
+                ? "접속자 목록:\n" + string.Join("\n", _cachedPlayerList)
+                : "(상세 목록 없음)";
+        }
     }
 
     private void UpdateChatUI(string message)
     {
         if (chatLogText == null) return;
 
-        // 채팅 로그 관리: 최대 줄 수 초과 시 오래된 메시지 삭제
-        chatLines.Add(message);
+        chatLines.Enqueue(message);
         while (chatLines.Count > MaxChatLogLines)
-            chatLines.RemoveAt(0);
+            chatLines.Dequeue();
 
         chatLogText.text = string.Join("\n", chatLines);
 
@@ -227,12 +324,9 @@ public class LobbyUIController : MonoBehaviour
     /// <summary>채팅 스크롤 영역을 맨 아래로 이동합니다.</summary>
     private void ScrollToBottom()
     {
-        if (chatScrollRect != null)
-        {
-            // Canvas 레이아웃이 갱신된 후 스크롤해야 정확히 최하단에 위치
-            Canvas.ForceUpdateCanvases();
-            chatScrollRect.verticalNormalizedPosition = 0f;
-        }
+        if (chatScrollRect == null || chatScrollRect.content == null) return;
+        LayoutRebuilder.ForceRebuildLayoutImmediate(chatScrollRect.content);
+        chatScrollRect.verticalNormalizedPosition = 0f;
     }
 
     // ── 패널 전환 상태 관리 ───────────────────────────────────
@@ -246,7 +340,7 @@ public class LobbyUIController : MonoBehaviour
         if (matchmakingPanel != null) matchmakingPanel.SetActive(false); // 팝업 숨기기
 
         if (startMatchButton  != null) startMatchButton.interactable = true;
-        if (cancelMatchButton != null) cancelMatchButton.interactable = true;
+        // cancelMatchButton은 ShowMatchmakingPanel에서만 활성화
 
         // UI 텍스트/슬라이더 초기화
         if (timerText      != null) timerText.text = $"{(int)maxWaitSeconds:00}초";
@@ -259,8 +353,9 @@ public class LobbyUIController : MonoBehaviour
     {
         isPopupActive = true;
 
-        if (lobbyPanel       != null) lobbyPanel.SetActive(true);        // 💡 뒤에 로비 화면 유지
-        if (dimBackground    != null) dimBackground.SetActive(true);     // 💡 딤 배경 표시
-        if (matchmakingPanel != null) matchmakingPanel.SetActive(true);  // 💡 매칭 팝업 표시
+        if (lobbyPanel        != null) lobbyPanel.SetActive(true);
+        if (dimBackground     != null) dimBackground.SetActive(true);
+        if (matchmakingPanel  != null) matchmakingPanel.SetActive(true);
+        if (cancelMatchButton != null) cancelMatchButton.interactable = true;
     }
 }

@@ -45,9 +45,9 @@ public class InGameManager : MonoBehaviour
     public int AliveCount => alivePlayers.Count;
 
     private readonly List<PlayerController> alivePlayers = new List<PlayerController>();
-    private bool  gameEnded    = false;
-    private float gameStartTime;
-    private float cleanupTimer = 0f;
+    private bool  gameEnded      = false;
+    private float gameStartTime  = -1f; // NetworkManager.ServerTime 기준, -1 = 미설정
+    private float cleanupTimer   = 0f;
 
     private void Awake()
     {
@@ -60,11 +60,22 @@ public class InGameManager : MonoBehaviour
         StartCoroutine(GameStartSequence());
     }
 
+    // NetworkManager.ServerTime 기반 시간 (단일/멀티 공통 사용)
+    private float GetSyncedTime()
+    {
+        if (Unity.Netcode.NetworkManager.Singleton != null &&
+            Unity.Netcode.NetworkManager.Singleton.IsListening)
+            return (float)Unity.Netcode.NetworkManager.Singleton.ServerTime.TimeAsFloat;
+        return Time.time;
+    }
+
     private void Update()
     {
         if (isGameActive && !gameEnded)
         {
-            ElapsedGameTime = Time.time - gameStartTime;
+            ElapsedGameTime = gameStartTime >= 0f
+                ? GetSyncedTime() - gameStartTime
+                : 0f;
 
             if (InGameHUD.Instance != null)
                 InGameHUD.Instance.UpdateTimer(ElapsedGameTime);
@@ -203,7 +214,7 @@ public class InGameManager : MonoBehaviour
         }
 
         isGameActive     = true;
-        gameStartTime    = Time.time;
+        gameStartTime    = GetSyncedTime(); // 모든 클라이언트가 동일한 네트워크 기준 시간 사용
         ElapsedGameTime  = 0f;
         MatchReviveUsedCount = 0; // 게임 시작 시 카운터 초기화
 
@@ -256,7 +267,7 @@ public class InGameManager : MonoBehaviour
         bool isWinner  = winner != null && winner.IsLocalPlayer;
         int  rank      = CalculateLocalRank(localPlayer);
         int  kills     = localPlayer != null ? localPlayer.killCount : 0;
-        float survived = Time.time - gameStartTime;
+        float survived = GetSyncedTime() - gameStartTime;
 
         if (GameManager.Instance != null)
         {

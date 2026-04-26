@@ -105,8 +105,6 @@ public class SupabaseManager : MonoBehaviour
 
     /// <summary>
     /// profiles 테이블에서 유저 프로필을 조회합니다.
-    /// 조회 성공 시 GameManager.reviveTicketCount에 보유 부활권 수를 캐시합니다.
-    /// 로그인 완료 후 반드시 호출하세요.
     /// </summary>
     public async Task<UserProfile> GetOrCreateProfile(string userId)
     {
@@ -124,12 +122,11 @@ public class SupabaseManager : MonoBehaviour
                 .Filter("id", Supabase.Postgrest.Constants.Operator.Equals, userId)
                 .Single();
 
-            Debug.Log($"[Supabase] Profile query finished. Found: {profile != null}");
-            // ... (중략)
             return profile;
         }
-        catch
+        catch (System.Exception e)
         {
+            Debug.LogWarning($"[Supabase] Profile query error: {e.Message}. Attempting retry...");
             await Task.Delay(500);
             try
             {
@@ -138,14 +135,11 @@ public class SupabaseManager : MonoBehaviour
                     .Filter("id", Supabase.Postgrest.Constants.Operator.Equals, userId)
                     .Single();
 
-                if (profile != null && GameManager.Instance != null)
-                    GameManager.Instance.reviveTicketCount = profile.ReviveTicketCount;
-
                 return profile;
             }
-            catch (System.Exception e)
+            catch (System.Exception ex)
             {
-                Debug.LogError($"⚠️ 프로필 로드 실패: {e.Message}");
+                Debug.LogError($"⚠️ 프로필 로드 실패: {ex.Message}");
                 return null;
             }
         }
@@ -180,6 +174,28 @@ public class SupabaseManager : MonoBehaviour
         catch (System.Exception e)
         {
             Debug.LogError($"⚠️ 결과 저장 실패: {e.Message}");
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  닉네임 저장
+    //  DB: update_nickname(p_nickname) → void
+    // ════════════════════════════════════════════════════════════
+
+    public async Task<bool> UpdateNickname(string nickname)
+    {
+        if (!IsInitialized) return false;
+
+        try
+        {
+            await Client.Rpc("update_nickname",
+                new Dictionary<string, object> { { "p_nickname", nickname } });
+            return true;
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"⚠️ 닉네임 저장 실패: {e.Message}");
+            return false;
         }
     }
 
@@ -400,7 +416,11 @@ public class SupabaseManager : MonoBehaviour
     /// <summary>로비 채팅 메시지 수신 시 발생하는 이벤트. (nickname, message)</summary>
     public event System.Action<string, string> OnLobbyChatReceived;
 
+    /// <summary>로비 접속자 수 변경 시 발생하는 이벤트. (count)</summary>
+    public event System.Action<int> OnLobbyPresenceCountChanged;
+
     private Supabase.Realtime.RealtimeChannel _lobbyChatChannel;
+    private Supabase.Realtime.RealtimePresence<LobbyPresence> _lobbyPresence;
     private bool _isLobbyChannelSubscribed = false;
 
     /// <summary>스팸 방지: 마지막 메시지 전송 시각</summary>
@@ -438,10 +458,7 @@ public class SupabaseManager : MonoBehaviour
             var broadcast = _lobbyChatChannel.Register<LobbyChatBroadcast>();
             broadcast.AddBroadcastEventHandler((sender, payload) =>
             {
-                // BaseBroadcast<LobbyChatPayload>로 캐스팅해야 Payload 프로퍼티에 접근 가능
                 var typed = payload as LobbyChatBroadcast;
-                // Realtime 콜백은 백그라운드 스레드에서 호출될 수 있으므로
-                // Unity 메인 스레드로 디스패치
                 MainThreadDispatcher.Enqueue(() =>
                 {
                     string nick = typed?.Payload?.Nickname ?? "???";
@@ -449,6 +466,20 @@ public class SupabaseManager : MonoBehaviour
                     OnLobbyChatReceived?.Invoke(nick, msg);
                 });
             });
+
+            // Presence 등록 — Subscribe 전에 Register 해야 함
+            string presenceKey = GameManager.Instance?.currentPlayerId ?? System.Guid.NewGuid().ToString();
+            _lobbyPresence = _lobbyChatChannel.Register<LobbyPresence>(presenceKey);
+
+            // Presence 이벤트 핸들러 (Sync/Join/Leave 모두 감지)
+            void UpdatePresenceCount(Supabase.Realtime.Interfaces.IRealtimePresence sender, Supabase.Realtime.Interfaces.IRealtimePresence.EventType type)
+            {
+                int count = _lobbyPresence.CurrentState?.Count ?? 0;
+                MainThreadDispatcher.Enqueue(() => OnLobbyPresenceCountChanged?.Invoke(count));
+            }
+            _lobbyPresence.AddPresenceEventHandler(Supabase.Realtime.Interfaces.IRealtimePresence.EventType.Sync, UpdatePresenceCount);
+            _lobbyPresence.AddPresenceEventHandler(Supabase.Realtime.Interfaces.IRealtimePresence.EventType.Join, UpdatePresenceCount);
+            _lobbyPresence.AddPresenceEventHandler(Supabase.Realtime.Interfaces.IRealtimePresence.EventType.Leave, UpdatePresenceCount);
 
             await _lobbyChatChannel.Subscribe();
             _isLobbyChannelSubscribed = true;
@@ -481,6 +512,7 @@ public class SupabaseManager : MonoBehaviour
         finally
         {
             _lobbyChatChannel = null;
+            _lobbyPresence = null;
             _isLobbyChannelSubscribed = false;
         }
     }
@@ -537,6 +569,53 @@ public class SupabaseManager : MonoBehaviour
 
     /// <summary>현재 로비 채팅 채널이 활성 상태인지 확인합니다.</summary>
     public bool IsLobbyChatSubscribed => _isLobbyChannelSubscribed;
+
+    // ════════════════════════════════════════════════════════════
+    //  [로비] Supabase Presence (접속자 수 실시간 추적)
+    // ════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// 로비 Presence를 Track합니다. SubscribeLobbyChat() 완료 후, 닉네임 로드 후 호출하세요.
+    /// </summary>
+    public void TrackLobbyPresence(string nickname)
+    {
+        if (_lobbyPresence == null || !_isLobbyChannelSubscribed)
+        {
+            Debug.LogWarning("[Supabase] Presence Track 실패 — 채널 미구독");
+            return;
+        }
+
+        try
+        {
+            _lobbyPresence.Track(new LobbyPresence { Nickname = nickname });
+            Debug.Log($"[Supabase] ✅ Presence 등록 완료: {nickname}");
+
+            // Track 직후 즉시 count 업데이트 (이벤트 대기 없이)
+            int count = _lobbyPresence.CurrentState?.Count ?? 0;
+            MainThreadDispatcher.Enqueue(() => OnLobbyPresenceCountChanged?.Invoke(count));
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogWarning($"[Supabase] Presence Track 실패: {e.Message}");
+        }
+    }
+
+    /// <summary>로비 Presence를 해제합니다. DisconnectLobbyChat() 내에서 호출됩니다.</summary>
+    public Task UntrackLobbyPresence()
+    {
+        if (_lobbyPresence == null) return Task.CompletedTask;
+
+        try
+        {
+            _lobbyPresence.Untrack();
+            Debug.Log("[Supabase] Presence 해제 완료");
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogWarning($"[Supabase] Presence Untrack 실패 (무시 가능): {e.Message}");
+        }
+        return Task.CompletedTask;
+    }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -551,3 +630,11 @@ public class LobbyChatPayload
 }
 
 public class LobbyChatBroadcast : Supabase.Realtime.Models.BaseBroadcast<LobbyChatPayload> { }
+
+// ════════════════════════════════════════════════════════════════
+//  Supabase Realtime Presence 페이로드 (lobby-chat 전용)
+// ════════════════════════════════════════════════════════════════
+public class LobbyPresence : Supabase.Realtime.Models.BasePresence
+{
+    [JsonProperty("nickname")] public string Nickname { get; set; }
+}

@@ -41,12 +41,13 @@ public class MatchmakingManager : MonoBehaviour
     // ── Inspector ───────────────────────────────────────────────
     [Header("Matchmaking Settings")]
     public int   maxPlayers     = 8;
-    public int   minPlayers     = 2;
-    public float maxWaitSeconds = 60f;
+    public int   minPlayers     = 1; // 테스트를 위해 1명으로 수정
+    public float maxWaitSeconds = 5f; // 테스트를 위해 5초로 단축
 
     [Header("데디케이티드 서버 설정")]
     [Tooltip("체크하면 이 인스턴스는 매칭 서버로 동작합니다. 커맨드라인 -dedicatedServer 인자로도 활성화됩니다.")]
     public bool   isDedicatedServerMode  = false;
+    private bool  _isServerLoopRunning   = false;
     [Tooltip("클라이언트에게 알릴 이 서버의 공인 IP. 커맨드라인 -serverIp 또는 GAME_SERVER_IP 환경변수로 재정의됩니다.")]
     public string myServerIpFallback     = "127.0.0.1";
     [Tooltip("게임 서버 포트. 커맨드라인 -port로 재정의됩니다.")]
@@ -70,13 +71,20 @@ public class MatchmakingManager : MonoBehaviour
     private RealtimeChannel realtimeChannel;
     private List<MatchmakingEntry> currentQueue = new List<MatchmakingEntry>();
 
+    // ── 서버 전용: DB joined_at 파싱 실패 대비 로컬 첫 감지 시각 추적 ──
+    private readonly Dictionary<string, DateTime> _playerFirstSeen = new Dictionary<string, DateTime>();
+
     // ════════════════════════════════════════════════════════════
     //  초기화
     // ════════════════════════════════════════════════════════════
 
     private void Awake()
     {
-        if (Instance == null) Instance = this;
+        if (Instance == null) 
+        { 
+            Instance = this; 
+            DontDestroyOnLoad(gameObject); 
+        }
         else { Destroy(gameObject); return; }
 
         // 커맨드라인 인자 -dedicatedServer 로 서버 모드 활성화
@@ -86,7 +94,21 @@ public class MatchmakingManager : MonoBehaviour
 
     private void Start()
     {
-        if (isDedicatedServerMode) StartServerMode();
+        CheckServerMode();
+    }
+
+    private void Update()
+    {
+        CheckServerMode();
+    }
+
+    private void CheckServerMode()
+    {
+        if (isDedicatedServerMode && !_isServerLoopRunning)
+        {
+            _isServerLoopRunning = true;
+            StartServerMode();
+        }
     }
 
     private void OnDestroy()
@@ -139,6 +161,17 @@ public class MatchmakingManager : MonoBehaviour
 
             var queue = response.Models.ToList();
 
+            // 서버 자신이 큐에 있으면 제외 (데디케이티드 서버가 클라이언트로 등록되면 안 됨)
+            string serverPlayerId = SupabaseManager.Instance?.Client.Auth.CurrentUser?.Id;
+            if (!string.IsNullOrEmpty(serverPlayerId))
+            {
+                int beforeCount = queue.Count;
+                queue = queue.Where(p => p.PlayerId != serverPlayerId).ToList();
+                if (beforeCount != queue.Count)
+                    Debug.Log($"[Server] 🔒 서버 자신을 매칭 큐에서 제외 ({beforeCount} → {queue.Count})");
+            }
+            // Debug.Log($"[Server] 큐 확인 중... 현재 대기 인원: {queue.Count}명");
+
             if (queue.Count == 0) return;
 
             // maxPlayers 단위로 즉시 매칭 (여러 매치 동시 처리)
@@ -152,8 +185,19 @@ public class MatchmakingManager : MonoBehaviour
             if (queue.Count == 0) return;
 
             // 남은 플레이어 중 가장 오래 기다린 플레이어 기준으로 판단
-            var oldest    = queue[0]; // joined_at ASC 정렬이므로 첫 번째
+            var oldest = queue[0];
+
+            // 서버 로컬 첫 감지 시각 등록 (DB joined_at 파싱 실패 대비)
+            foreach (var p in queue)
+                if (!_playerFirstSeen.ContainsKey(p.PlayerId))
+                    _playerFirstSeen[p.PlayerId] = DateTime.UtcNow;
+
+            // 대기 시간 계산: DB 값 우선, 실패 시 서버 로컬 시각 사용
             float waitSec = GetWaitSeconds(oldest.JoinedAt);
+            if (waitSec <= 0f && _playerFirstSeen.TryGetValue(oldest.PlayerId, out DateTime firstSeen))
+                waitSec = (float)(DateTime.UtcNow - firstSeen).TotalSeconds;
+
+            Debug.Log($"[Server] {oldest.Nickname} 감지! RawTime: {oldest.JoinedAt}, 대기: {waitSec:F1}s / 목표: {maxWaitSeconds}s");
 
             if (waitSec >= maxWaitSeconds)
             {
@@ -176,6 +220,10 @@ public class MatchmakingManager : MonoBehaviour
 
     private async Task ExecuteServerMatch(List<MatchmakingEntry> players)
     {
+        // 매칭된 플레이어 로컬 추적에서 제거
+        foreach (var p in players)
+            _playerFirstSeen.Remove(p.PlayerId);
+
         string ip       = GetMyServerIP();
         ushort port     = GetServerPort();
         string endpoint = $"{ip}:{port}"; // "1.2.3.4:7777" 형태로 room_id에 저장
@@ -190,6 +238,13 @@ public class MatchmakingManager : MonoBehaviour
                 { "p_server_ip", endpoint }
             };
             await SupabaseManager.Instance.Client.Rpc<string>("server_assign_match", param);
+
+            // 🚀 매칭 DB 업데이트 성공 후, 모든 인원을 인게임 씬으로 이동시킴
+            if (Unity.Netcode.NetworkManager.Singleton.IsServer)
+            {
+                Debug.Log("[Server] 🎬 모든 플레이어 인게임 씬으로 이동 시작...");
+                Unity.Netcode.NetworkManager.Singleton.SceneManager.LoadScene("InGameScene", UnityEngine.SceneManagement.LoadSceneMode.Single);
+            }
         }
         catch (Exception e) { Debug.LogError($"[Server] 매칭 DB 업데이트 실패: {e.Message}"); }
     }
@@ -209,7 +264,7 @@ public class MatchmakingManager : MonoBehaviour
         currentQueue.Clear();
 
         myPlayerId = SupabaseManager.Instance.Client.Auth.CurrentUser?.Id;
-        myNickname = GameManager.Instance?.currentPlayerId ?? "Unknown";
+        myNickname = GameManager.Instance?.currentPlayerNickname ?? "Unknown";
 
         if (string.IsNullOrEmpty(myPlayerId))
         {
@@ -369,8 +424,9 @@ public class MatchmakingManager : MonoBehaviour
             {
                 PlayerId = myPlayerId,
                 Nickname = myNickname,
-                Status = "waiting",
-                RoomId = null
+                Status   = "waiting",
+                JoinedAt = DateTime.UtcNow.ToString("o"), // ISO 8601 형식으로 현재 UTC 시간 저장
+                RoomId   = null
             };
             var response = await SupabaseManager.Instance.Client.From<MatchmakingEntry>().Insert(newEntry);
             if (response?.Models != null && response.Models.Count > 0)
@@ -488,8 +544,12 @@ public class MatchmakingManager : MonoBehaviour
         if (string.IsNullOrEmpty(joinedAt)) return 0f;
         try
         {
-            var joined = DateTime.Parse(joinedAt, null, System.Globalization.DateTimeStyles.RoundtripKind);
-            return (float)(DateTime.UtcNow - joined.ToUniversalTime()).TotalSeconds;
+            // 다양한 ISO 8601 형식을 처리하기 위해 DateTimeOffset 사용 권장
+            if (DateTimeOffset.TryParse(joinedAt, out DateTimeOffset joined))
+            {
+                return (float)(DateTimeOffset.UtcNow - joined).TotalSeconds;
+            }
+            return 0f;
         }
         catch { return 0f; }
     }

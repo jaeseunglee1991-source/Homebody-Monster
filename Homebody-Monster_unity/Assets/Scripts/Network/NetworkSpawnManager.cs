@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using Unity.Netcode;
 using UnityEngine;
 
@@ -183,5 +184,5 @@ public class NetworkSpawnManager : NetworkBehaviour
     }
 
     public IReadOnlyCollection<PlayerNetworkSync> GetAllPlayers()
-        => _players.Values;
+        => _players.Values.ToList();
 }

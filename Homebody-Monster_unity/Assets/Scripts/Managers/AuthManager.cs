@@ -34,11 +34,26 @@ public class AuthManager : MonoBehaviour
     [Header("공통 UI")]
     public TMP_Text errorText;
 
-    // 닉네임 규칙: 2~12자, 한글/영문/숫자만, 앞뒤 공백 금지
+    // 닉네임 규칙: 2~12자, 첫 글자 한글/영문, 한글/영문/숫자/_만, 공백·기타특수문자 금지
     private static readonly Regex NicknameRegex = new Regex(
-        @"^[가-힣a-zA-Z0-9]{2,12}$",
+        @"^[가-힣a-zA-Z][가-힣a-zA-Z0-9_]{1,11}$",
         RegexOptions.Compiled
     );
+
+    private static readonly string[] ForbiddenWords =
+    {
+        "씨발","시발","씨팔","시팔","씨빨","시빨","쓰벌","ㅅㅂ",
+        "개새끼","개새","개년","개놈","개쓰레기",
+        "병신","벙신","ㅂㅅ",
+        "보지","자지",
+        "애미","애비","니애미","니애비",
+        "창녀","창놈","걸레년",
+        "미친놈","미친년","미친새끼",
+        "꺼져","죽어","뒤져",
+        "운영자","관리자","운영진","admin","gm","master","system",
+        "fuck","fuk","fck","shit","bitch","asshole","bastard","cunt",
+        "nigger","nigga"
+    };
 
     private bool _isBusy = false;
 
@@ -252,26 +267,41 @@ public class AuthManager : MonoBehaviour
         string raw = nicknameInput != null ? nicknameInput.text : "";
         string newName = raw.Trim();
 
-        // 클라이언트 사전 검증
         if (!NicknameRegex.IsMatch(newName))
         {
             if (newName.Length < 2)
                 ShowError("닉네임은 최소 2글자 이상이어야 합니다.");
             else if (newName.Length > 12)
                 ShowError("닉네임은 최대 12글자까지 가능합니다.");
+            else if (newName.Length >= 1 && char.IsDigit(newName[0]))
+                ShowError("닉네임은 숫자로 시작할 수 없습니다.");
             else
                 ShowError("닉네임은 한글, 영문, 숫자만 사용 가능합니다.");
             return;
         }
 
-        SetBusy(true, "닉네임 확인 중...");
+        // 금칙어 체크
+        string lowerName = newName.ToLower();
+        foreach (string word in ForbiddenWords)
+        {
+            if (lowerName.Contains(word.ToLower()))
+            {
+                ShowError("사용할 수 없는 닉네임입니다.");
+                return;
+            }
+        }
+
+        SetBusy(true, "닉네임 중복 확인 중...");
 
         try
         {
+            Debug.Log($"[Auth] Checking if nickname '{newName}' is available...");
             bool isAvailable = await SupabaseManager.Instance.IsNicknameAvailable(newName);
+            Debug.Log($"[Auth] Nickname available: {isAvailable}");
+
             if (!isAvailable)
             {
-                ShowError("이미 사용 중이거나 사용할 수 없는 닉네임입니다.");
+                ShowError("이미 사용 중인 닉네임입니다.");
                 return;
             }
 
@@ -283,19 +313,20 @@ public class AuthManager : MonoBehaviour
                 return;
             }
 
-            await SupabaseManager.Instance.Client
-                .From<UserProfile>()
-                .Where(x => x.Id == uid)
-                .Set(x => x.Nickname, newName)
-                .Update();
+            bool updated = await SupabaseManager.Instance.UpdateNickname(newName);
+            if (!updated)
+            {
+                ShowError("저장에 실패했습니다. 다시 시도해주세요.");
+                return;
+            }
 
             Debug.Log($"[Auth] 닉네임 설정 완료: {newName}");
-            EnterLobby(newName);
+            EnterLobby(uid); // 💡 중요: 닉네임이 아닌 고유 ID(UID)를 전달해야 로비에서 정보를 읽어옵니다.
         }
         catch (System.Exception e)
         {
             ShowError("저장에 실패했습니다. 다시 시도해주세요.");
-            Debug.LogError($"[Auth] 닉네임 저장 오류: {e.Message}");
+            Debug.LogError($"[Auth] 닉네임 저장 중 치명적 오류: {e.GetType()} - {e.Message}\n{e.StackTrace}");
         }
         finally
         {
@@ -358,11 +389,12 @@ public class AuthManager : MonoBehaviour
         if (errorText != null) errorText.text = "";
     }
 
-    private void EnterLobby(string nickname)
+    private void EnterLobby(string uid)
     {
         if (GameManager.Instance != null)
         {
-            GameManager.Instance.currentPlayerId = nickname;
+            Debug.Log($"[Auth] Transitioning to LobbyScene with UID: {uid}");
+            GameManager.Instance.currentPlayerId = uid;
             GameManager.Instance.LoadScene("LobbyScene");
         }
         else
