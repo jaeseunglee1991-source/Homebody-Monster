@@ -73,16 +73,16 @@ public static class SkillSystem
                 Vector2 dir  = caster.GetFacingDirection();
                 Vector2 orig = caster.Rb.position;
                 Vector2 dest = orig + dir * 2.5f;
-                // 서버: 물리 이동 직접 수행 (ClientNetworkTransform이 owner에게 전달)
-                float el = 0f;
-                while (el < 0.15f)
+                // Owner 클라이언트에게 시각적 이동 지시
+                caster.networkSync.ForceMoveClientRpc(orig, dest, 0.15f,
+                    OwnerRpcParams(caster.networkSync.OwnerClientId));
+                // 서버에서는 경로 전체를 CircleCast로 충돌 판정 (이동 없이 계산만)
+                yield return new WaitForSeconds(0.15f);
+                if (caster.networkSync.NetworkIsDead.Value) yield break;
+                foreach (var h in Physics2D.CircleCastAll(orig, 0.8f, dir, 2.5f, caster.enemyLayer))
                 {
-                    el += Time.deltaTime;
-                    caster.Rb.MovePosition(Vector2.Lerp(orig, dest, el / 0.15f));
-                    yield return null;
-                }
-                foreach (var t in GetEnemiesInRadius(caster, 1.5f))
-                {
+                    var t = h.collider.GetComponent<PlayerController>();
+                    if (t == null || t.IsDead || t == caster || t.networkSync == null) continue;
                     DealSkillDamageServer(caster, t, cData.baseAtk * 1.5f);
                     t.networkSync.ApplyStatusEffectServer(StatusEffectType.Stun, 0.5f, 0f, caster.networkSync);
                 }
@@ -140,23 +140,18 @@ public static class SkillSystem
                 Vector2 dir  = caster.GetFacingDirection();
                 Vector2 orig = caster.Rb.position;
                 Vector2 dest = orig + dir * 6f;
-                float el = 0f;
+                // Owner 클라이언트에게 시각적 이동 지시
+                caster.networkSync.ForceMoveClientRpc(orig, dest, 0.4f,
+                    OwnerRpcParams(caster.networkSync.OwnerClientId));
+                // 서버에서 경로 전체를 CircleCast로 충돌 판정
                 var hit = new HashSet<PlayerController>();
-                while (el < 0.4f)
+                foreach (var c2 in Physics2D.CircleCastAll(orig, 1.2f, dir, 6f, caster.enemyLayer))
                 {
-                    el += Time.deltaTime;
-                    caster.Rb.MovePosition(Vector2.Lerp(orig, dest, el / 0.4f));
-                    foreach (var c2 in Physics2D.OverlapCircleAll(caster.Rb.position, 1.2f, caster.enemyLayer))
-                    {
-                        var t = c2.GetComponent<PlayerController>();
-                        if (t != null && !t.IsDead && t != caster && !hit.Contains(t))
-                        {
-                            hit.Add(t);
-                            DealSkillDamageServer(caster, t, cData.baseAtk * 1.0f);
-                            caster.StartCoroutine(KnockbackRoutineServer(t, dir, 3f));
-                        }
-                    }
-                    yield return null;
+                    var t = c2.collider.GetComponent<PlayerController>();
+                    if (t == null || t.IsDead || t == caster || t.networkSync == null) continue;
+                    if (!hit.Add(t)) continue;
+                    DealSkillDamageServer(caster, t, cData.baseAtk * 1.0f);
+                    ApplyKnockbackServer(t, dir, 3f);
                 }
                 yield break;
             }
@@ -195,11 +190,14 @@ public static class SkillSystem
             // ── 버서커 ────────────────────────────────────────────
             case ActiveSkillType.RuthlessStrike:
             {
-                float cost = cData.maxHp * 0.1f;
-                if (caster.networkSync.NetworkHp.Value <= cost) yield break;
-                // HP 10% 소모
-                caster.networkSync.NetworkHp.Value   -= cost;
-                cData.currentHp                       = caster.networkSync.NetworkHp.Value;
+                float cost  = cData.maxHp * 0.1f;
+                float curHp = caster.networkSync.NetworkHp.Value;
+                if (curHp <= cost) yield break;
+                float newHp = curHp - cost;
+                caster.networkSync.NetworkHp.Value = newHp;
+                cData.currentHp                    = newHp;
+                // HP 차감 후 0 이하 방어 (부동소수점 오차 대비)
+                if (newHp <= 0f || caster.networkSync.NetworkIsDead.Value) yield break;
                 var t = GetClosestEnemy(caster, 2f);
                 if (t != null) DealSkillDamageServer(caster, t, cData.baseAtk * 2.0f);
                 yield break;
@@ -337,8 +335,8 @@ public static class SkillSystem
                 foreach (var t in GetEnemiesInRadius(caster, 2.5f))
                 {
                     DealSkillDamageServer(caster, t, cData.baseAtk * 1.0f);
-                    caster.StartCoroutine(KnockbackRoutineServer(t,
-                        ((Vector2)t.transform.position - caster.Rb.position).normalized, 4f));
+                    ApplyKnockbackServer(t,
+                        ((Vector2)t.transform.position - caster.Rb.position).normalized, 4f);
                 }
                 yield break;
 
@@ -381,9 +379,12 @@ public static class SkillSystem
             {
                 var t = GetClosestEnemy(caster, 12f);
                 if (t == null) yield break;
-                // 순간이동: 서버에서 위치 설정 (ClientNetworkTransform이 Owner에게 전달)
-                caster.Rb.position = (Vector2)t.transform.position - t.GetFacingDirection() * 0.8f;
-                yield return null;
+                Vector2 dest = (Vector2)t.transform.position - t.GetFacingDirection() * 0.8f;
+                // Owner 클라이언트에게 순간이동 지시 (ClientNetworkTransform 권한 대응)
+                caster.networkSync.ForcePositionClientRpc(dest,
+                    OwnerRpcParams(caster.networkSync.OwnerClientId));
+                yield return null; // 1프레임 대기: 위치 동기화 후 데미지 판정
+                if (caster.networkSync.NetworkIsDead.Value) yield break;
                 DealSkillDamageServer(caster, t, cData.baseAtk * 2.5f);
                 t.networkSync.ApplyStatusEffectServer(StatusEffectType.Stun, 1f, 0f, caster.networkSync);
                 yield break;
@@ -432,6 +433,9 @@ public static class SkillSystem
                 if (t == null) yield break;
                 t.networkSync.ApplyStatusEffectServer(StatusEffectType.DeathMarkTarget, 3f, 0f, caster.networkSync);
                 yield return new WaitForSeconds(3f);
+                // 3초 대기 후 시전자가 이미 사망·Despawn됐을 수 있음
+                if (caster == null || caster.networkSync == null) yield break;
+                if (caster.networkSync.NetworkIsDead.Value) yield break;
                 if (!t.networkSync.NetworkIsDead.Value)
                 {
                     float bonus = t.networkSync.ServerData.deathMarkAccumulated * 0.3f;
@@ -447,6 +451,7 @@ public static class SkillSystem
                 if (t != null)
                 {
                     DealSkillDamageServer(caster, t, cData.baseAtk * 1.0f);
+                    // 20% Stun: 서버에서 결정 → SyncStatusEffectClientRpc로 모든 클라이언트에 동기화됨
                     if (Random.value < 0.2f)
                         t.networkSync.ApplyStatusEffectServer(StatusEffectType.Stun, 1f, 0f, caster.networkSync);
                 }
@@ -455,19 +460,19 @@ public static class SkillSystem
 
             case ActiveSkillType.BurningOil:
             {
-                float el = 0f;
-                var applied = new HashSet<PlayerController>();
+                // 0.5초 틱마다 영역 내 적에게 Burn 재적용.
+                // StatusEffectSystem은 기존 효과 duration을 Max로 갱신하므로
+                // 영역 내에 있는 동안 Burn이 유지되고, 이탈하면 1.5초 후 자연 소멸함.
+                float el = 0f, nextTick = 0f;
                 while (el < 3f)
                 {
                     el += Time.deltaTime;
-                    foreach (var t in GetEnemiesInRadius(caster, 2.0f, targetPos))
+                    if (el >= nextTick)
                     {
-                        if (!applied.Contains(t))
-                        {
-                            applied.Add(t);
-                            t.networkSync.ApplyStatusEffectServer(StatusEffectType.Burn, 3f - el,
+                        nextTick += 0.5f;
+                        foreach (var t in GetEnemiesInRadius(caster, 2.0f, targetPos))
+                            t.networkSync.ApplyStatusEffectServer(StatusEffectType.Burn, 1.5f,
                                 1.5f, caster.networkSync);
-                        }
                     }
                     yield return null;
                 }
@@ -491,6 +496,25 @@ public static class SkillSystem
     // ════════════════════════════════════════════════════════════
     //  서버 전용 서브루틴
     // ════════════════════════════════════════════════════════════
+
+    // ── ClientRpcParams 헬퍼 — 특정 Owner에게만 전송 ──────────
+    private static ClientRpcParams OwnerRpcParams(ulong clientId) => new ClientRpcParams
+    {
+        Send = new ClientRpcSendParams { TargetClientIds = new[] { clientId } }
+    };
+
+    // ── 넉백 적용 (ClientNetworkTransform 권한 대응) ──────────
+    // 이전 KnockbackRoutineServer(서버 Rb.MovePosition)는 ClientNetworkTransform에서
+    // 클라이언트 값이 우선하여 적용되지 않음 → 타겟 Owner에게 ForceKnockbackClientRpc 사용
+    private static void ApplyKnockbackServer(
+        PlayerController target, Vector2 dir, float force, float duration = 0.2f)
+    {
+        if (target == null || target.networkSync == null) return;
+        if (target.IsDead || target.networkSync.NetworkIsDead.Value) return;
+        target.networkSync.ForceKnockbackClientRpc(
+            dir, force, duration,
+            OwnerRpcParams(target.networkSync.OwnerClientId));
+    }
 
     // ════════════════════════════════════════════════════════════
     //  투사체 스폰 헬퍼 (서버 전용)
@@ -544,17 +568,6 @@ public static class SkillSystem
                     break;
                 }
             }
-            yield return null;
-        }
-    }
-
-    private static IEnumerator KnockbackRoutineServer(PlayerController target, Vector2 dir, float force)
-    {
-        float el = 0f, dur = 0.2f;
-        while (el < dur)
-        {
-            el += Time.deltaTime;
-            target.Rb.MovePosition(target.Rb.position + dir * force * (1f - el / dur) * Time.deltaTime);
             yield return null;
         }
     }

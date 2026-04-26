@@ -48,6 +48,9 @@ public class InGameManager : MonoBehaviour
     private bool  gameEnded      = false;
     private float gameStartTime  = -1f; // NetworkManager.ServerTime 기준, -1 = 미설정
     private float cleanupTimer   = 0f;
+    // 로컬 플레이어 사망 시점의 순위를 즉시 기록.
+    // FinishGame 호출 시점엔 alivePlayers=1이어서 역산 불가 → 여기서 캡처.
+    private int _localPlayerFinalRank = 0;
 
     private void Awake()
     {
@@ -108,6 +111,12 @@ public class InGameManager : MonoBehaviour
         if (!alivePlayers.Contains(deadPlayer)) return;
 
         alivePlayers.Remove(deadPlayer);
+
+        // 사망 직후 생존자 수로 순위 즉시 기록 (alivePlayers.Count + 1)
+        // 예: 8명 중 내가 6번째 사망 → 제거 후 생존 2명 → 순위 3위
+        if (deadPlayer.IsLocalPlayer)
+            _localPlayerFinalRank = alivePlayers.Count + 1;
+
         RefreshHUD();
         CheckWinCondition();
     }
@@ -317,7 +326,11 @@ public class InGameManager : MonoBehaviour
     }
 
     private int CalculateLocalRank(PlayerController localPlayer)
-        => alivePlayers.Contains(localPlayer) ? 1 : alivePlayers.Count + 1;
+    {
+        if (alivePlayers.Contains(localPlayer)) return 1;
+        // 사망 시점에 기록한 순위 사용 (미기록 시 폴백: 생존자+1)
+        return _localPlayerFinalRank > 0 ? _localPlayerFinalRank : alivePlayers.Count + 1;
+    }
 
     private void RefreshHUD()
     {

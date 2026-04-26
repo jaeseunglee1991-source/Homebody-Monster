@@ -77,7 +77,8 @@ public class PlayerController : NetworkBehaviour
 
     private void Start()
     {
-        if (myData == null && GameManager.Instance?.myCharacterData != null)
+        // 프리팹의 기본값을 무시하고 GameManager의 실제 캐릭터 데이터로 덮어쓰기
+        if (GameManager.Instance?.myCharacterData != null)
             myData = GameManager.Instance.myCharacterData;
 
         // 등록은 PlayerNetworkSync.OnNetworkSpawn에서 수행하므로 중복 제거
@@ -359,8 +360,6 @@ public class PlayerController : NetworkBehaviour
 
         if (IsOwner && InGameHUD.Instance != null && myData != null)
             InGameHUD.Instance.UpdateHealthBar(myData.maxHp, myData.maxHp);
-
-        Debug.Log($"[Combat] {myData?.playerName} 부활 완료 (즉시 전투 가능)");
     }
 
     // ════════════════════════════════════════════════════════════

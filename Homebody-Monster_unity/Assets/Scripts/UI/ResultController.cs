@@ -1,5 +1,5 @@
+using TMPro;
 using UnityEngine;
-using UnityEngine.UI;
 
 /// <summary>
 /// 결과 씬 UI를 관리합니다.
@@ -8,12 +8,12 @@ using UnityEngine.UI;
 public class ResultController : MonoBehaviour
 {
     [Header("Result UI")]
-    public Text resultTitleText;    // "승리!" 또는 "패배 (X위)"
-    public Text resultDetailText;   // 킬 수, 생존 시간 등 상세 정보
+    public TextMeshProUGUI resultTitleText;
+    public TextMeshProUGUI resultDetailText;
 
     [Header("Result Chat UI")]
-    public Text       chatLogText;
-    public InputField chatInputField;
+    public TextMeshProUGUI chatLogText;
+    public TMP_InputField  chatInputField;
 
     private void Start()
     {

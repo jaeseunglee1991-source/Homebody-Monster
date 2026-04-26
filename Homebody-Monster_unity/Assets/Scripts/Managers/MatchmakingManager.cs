@@ -94,8 +94,18 @@ public class MatchmakingManager : MonoBehaviour
 
     private void Start()
     {
-        // 서버 모드는 Awake에서 결정되므로 Start에서 1회만 진입.
-        // 매 프레임 체크는 불필요한 오버헤드.
+        CheckServerMode();
+    }
+
+    private void Update()
+    {
+        // Inspector 토글 지원 (가드로 효율화: 실제 시작은 1회만)
+        if (isDedicatedServerMode && !_isServerLoopRunning)
+            CheckServerMode();
+    }
+
+    private void CheckServerMode()
+    {
         if (isDedicatedServerMode && !_isServerLoopRunning)
         {
             _isServerLoopRunning = true;
@@ -156,13 +166,7 @@ public class MatchmakingManager : MonoBehaviour
             // 서버 자신이 큐에 있으면 제외 (데디케이티드 서버가 클라이언트로 등록되면 안 됨)
             string serverPlayerId = SupabaseManager.Instance?.Client.Auth.CurrentUser?.Id;
             if (!string.IsNullOrEmpty(serverPlayerId))
-            {
-                int beforeCount = queue.Count;
                 queue = queue.Where(p => p.PlayerId != serverPlayerId).ToList();
-                if (beforeCount != queue.Count)
-                    Debug.Log($"[Server] 🔒 서버 자신을 매칭 큐에서 제외 ({beforeCount} → {queue.Count})");
-            }
-            // Debug.Log($"[Server] 큐 확인 중... 현재 대기 인원: {queue.Count}명");
 
             if (queue.Count == 0) return;
 
@@ -189,8 +193,6 @@ public class MatchmakingManager : MonoBehaviour
             if (waitSec <= 0f && _playerFirstSeen.TryGetValue(oldest.PlayerId, out DateTime firstSeen))
                 waitSec = (float)(DateTime.UtcNow - firstSeen).TotalSeconds;
 
-            Debug.Log($"[Server] {oldest.Nickname} 감지! RawTime: {oldest.JoinedAt}, 대기: {waitSec:F1}s / 목표: {maxWaitSeconds}s");
-
             if (waitSec >= maxWaitSeconds)
             {
                 if (queue.Count >= minPlayers)
@@ -201,7 +203,6 @@ public class MatchmakingManager : MonoBehaviour
                 else
                 {
                     // 인원 부족 → 서버가 해당 플레이어 큐에서 제거
-                    Debug.Log($"[Server] 인원 부족으로 매칭 취소: {oldest.Nickname} ({waitSec:0}초 대기)");
                     var param = new Dictionary<string, object> { { "p_player_id", oldest.PlayerId } };
                     await SupabaseManager.Instance.Client.Rpc<string>("leave_matchmaking_queue", param);
                 }

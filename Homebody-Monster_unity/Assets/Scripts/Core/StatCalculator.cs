@@ -42,7 +42,6 @@ public static class StatCalculator
         data.moveSpeed = stat.Speed;
 
         RollSkills(data);
-        Debug.Log($"[StatCalc] {data.playerName} | {data.job}/{data.affinity}/{data.grade} HP:{data.maxHp:0.#} ATK:{data.baseAtk:0.#}");
         return data;
     }
 

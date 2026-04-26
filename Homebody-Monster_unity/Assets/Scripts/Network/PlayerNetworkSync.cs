@@ -75,6 +75,9 @@ public class PlayerNetworkSync : NetworkBehaviour
     private CharacterData      _serverData;
     private float              _lastAttackTime = -999f;
     private PlayerNetworkSync  _pendingKiller  = null;
+    // 스킬별 마지막 사용 시각 — 악의적 클라이언트의 쿨다운 무시 RPC 반복 전송 방지
+    private readonly Dictionary<ActiveSkillType, float> _skillLastUsed =
+        new Dictionary<ActiveSkillType, float>();
 
     // ── 부활 상태 필드 ─────────────────────────────────────────
     // _hasUsedRevive   : 부활 기회를 최종 소모했는지 (성공/포기/타임아웃 모두 포함)
@@ -158,12 +161,29 @@ public class PlayerNetworkSync : NetworkBehaviour
     [ServerRpc]
     private void SubmitCharacterDataServerRpc(NetworkCharacterData netData)
     {
+        // StatCalculator 이론 최댓값 기준 범위 검증 (개조 클라이언트 maxHp=9999 등 차단)
+        // HP 최댓값: 50 * (1+9*0.111) * 1.4 ≈ 140, ATK 최댓값: 5.0 * 2.0 * 1.5 ≈ 15
+        if (!IsValidCharacterData(netData))
+        {
+            Debug.LogWarning($"[Server] 클라이언트 {OwnerClientId}: 유효하지 않은 CharacterData 거부 " +
+                             $"(HP={netData.MaxHp:0.#}, ATK={netData.BaseAtk:0.#})");
+            return;
+        }
         _serverData        = netData.ToCharacterData();
         // 닉네임은 NetworkNickname을 통해 별도 동기화되므로 서버에서 주입
         _serverData.playerName = NetworkNickname.Value.ToString();
         NetworkHp.Value    = _serverData.maxHp;
         NetworkMaxHp.Value = _serverData.maxHp;
-        Debug.Log($"[Server] 플레이어 {OwnerClientId} ({_serverData.playerName}) 데이터 수신 (HP:{_serverData.maxHp}, ATK:{_serverData.baseAtk})");
+    }
+
+    private static bool IsValidCharacterData(NetworkCharacterData d)
+    {
+        if (d.Job   < 0 || d.Job   > 9)   return false;
+        if (d.Grade < 0 || d.Grade > 9)   return false;
+        if (d.MaxHp    < 5f   || d.MaxHp    > 160f) return false;
+        if (d.BaseAtk  < 0.5f || d.BaseAtk  > 20f)  return false;
+        if (d.MoveSpeed < 1f  || d.MoveSpeed > 6f)   return false;
+        return true;
     }
 
     [ServerRpc]
@@ -201,7 +221,7 @@ public class PlayerNetworkSync : NetworkBehaviour
         targetSync.NetworkHp.Value       = newHp;
         targetSync._serverData.currentHp = newHp;
 
-        targetSync.NotifyHitClientRpc(result.finalDamage, result.isEvaded, result.isCritical, result.isDivineGraceBlocked);
+        targetSync.NotifyHitClientRpc(result);
 
         // 1순위: 타겟 사망 체크 (일반 공격 흐름)
         if (newHp <= 0f && !targetSync.NetworkIsDead.Value)
@@ -245,8 +265,6 @@ public class PlayerNetworkSync : NetworkBehaviour
         }
         else
         {
-            string reason = GetReviveDeniedReason(target);
-            Debug.Log($"[Server] {target.OwnerClientId} 부활권 사용 불가 — {reason}");
             target._hasUsedRevive = true;
             FinalizeDeath(target);
         }
@@ -262,6 +280,8 @@ public class PlayerNetworkSync : NetworkBehaviour
         if (mgr.MatchReviveUsedCount >= InGameManager.MaxMatchReviveCount) return false;
         return true;
     }
+
+    // 부활권 불가 사유 텍스트 (테스트/디버깅용)
 
     private static string GetReviveDeniedReason(PlayerNetworkSync target)
     {
@@ -281,7 +301,6 @@ public class PlayerNetworkSync : NetworkBehaviour
         target._pendingKiller = null;
 
         InGameManager.Instance?.OnPlayerDied(target._controller);
-        Debug.Log($"[Server] {killer.OwnerClientId} → {target.OwnerClientId} 처치! (킬:{killer.NetworkKillCount.Value})");
     }
 
     // ════════════════════════════════════════════════════════════
@@ -303,8 +322,6 @@ public class PlayerNetworkSync : NetworkBehaviour
         }
         catch (TaskCanceledException)
         {
-            // 플레이어가 부활/포기 버튼을 눌러 CTS가 취소됨 → 정상 흐름
-            Debug.Log($"[Server] {OwnerClientId} 부활 타임아웃 타이머 취소 (플레이어 응답)");
             return;
         }
 
@@ -315,7 +332,6 @@ public class PlayerNetworkSync : NetworkBehaviour
             _hasUsedRevive = true;
             FinalizeDeath(this);
             ReviveDeniedClientRpc();
-            Debug.Log($"[Server] {OwnerClientId} 부활 타임아웃 → 최종 사망");
         }
     }
 
@@ -330,7 +346,6 @@ public class PlayerNetworkSync : NetworkBehaviour
         _isProcessingRevive = false;
         _pendingKiller      = null;
         CancelAndDisposeCts();
-        Debug.Log($"[Server] {OwnerClientId} 부활권 상태 초기화");
     }
 
     // ════════════════════════════════════════════════════════════
@@ -406,7 +421,6 @@ public class PlayerNetworkSync : NetworkBehaviour
         }
         else
         {
-            Debug.LogWarning("[Client] SupabaseManager 없음 — 티켓 차감 생략 (테스트 모드)");
             success = true;
         }
 
@@ -442,8 +456,6 @@ public class PlayerNetworkSync : NetworkBehaviour
         InGameManager.Instance?.OnPlayerRevived(_controller);
 
         ExecuteReviveClientRpc();
-        Debug.Log($"[Server] {OwnerClientId} 부활 확정! " +
-                  $"(매치 부활: {InGameManager.Instance?.MatchReviveUsedCount}/{InGameManager.MaxMatchReviveCount})");
     }
 
     [ServerRpc]
@@ -470,20 +482,15 @@ public class PlayerNetworkSync : NetworkBehaviour
     }
 
     [ClientRpc]
-    private void NotifyHitClientRpc(float damage, bool isEvaded, bool isCritical, bool isDivineGrace)
+    private void NotifyHitClientRpc(DamageResult result)
     {
-        _controller.ShowDamagePopupNetwork(new DamageResult
-        {
-            finalDamage = damage, isEvaded = isEvaded,
-            isCritical = isCritical, isDivineGraceBlocked = isDivineGrace
-        });
+        _controller.ShowDamagePopupNetwork(result);
     }
 
     [ClientRpc]
     private void DeclareDeathClientRpc(ulong killerNetworkObjectId)
     {
         _controller.PlayDeathAnimation();
-        if (IsOwner) Debug.Log("[Network] 내 캐릭터가 사망했습니다.");
     }
 
     // ════════════════════════════════════════════════════════════
@@ -506,7 +513,7 @@ public class PlayerNetworkSync : NetworkBehaviour
 
         if (_serverData.deathMarkActive) _serverData.deathMarkAccumulated += damage;
 
-        NotifyHitClientRpc(result.finalDamage, result.isEvaded, result.isCritical, result.isDivineGraceBlocked);
+        NotifyHitClientRpc(result);
 
         if (newHp <= 0f && !NetworkIsDead.Value)
         {
@@ -519,14 +526,21 @@ public class PlayerNetworkSync : NetworkBehaviour
     {
         if (!IsServer || NetworkIsDead.Value) return;
         _controller.StatusFX.ApplyEffectServer(type, duration, value, source?._controller);
-        SyncStatusEffectClientRpc((int)type, duration, value);
+        // source NetworkObjectId 전달 → 클라이언트에서 피격 방향·넉백 방향 연출에 활용
+        ulong srcId = (source?.NetworkObject != null) ? source.NetworkObject.NetworkObjectId : ulong.MaxValue;
+        SyncStatusEffectClientRpc((int)type, duration, value, srcId);
     }
 
     [ClientRpc]
-    private void SyncStatusEffectClientRpc(int type, float duration, float value)
+    private void SyncStatusEffectClientRpc(int type, float duration, float value, ulong sourceNetObjId)
     {
         if (IsServer) return;
-        _controller.StatusFX.ApplyEffectNetwork((StatusEffectType)type, duration, value);
+        PlayerController sourceCtrl = null;
+        if (sourceNetObjId != ulong.MaxValue &&
+            NetworkManager.Singleton?.SpawnManager.SpawnedObjects
+                .TryGetValue(sourceNetObjId, out var srcNetObj) == true)
+            sourceCtrl = srcNetObj.GetComponent<PlayerController>();
+        _controller.StatusFX.ApplyEffectNetwork((StatusEffectType)type, duration, value, sourceCtrl);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -544,6 +558,12 @@ public class PlayerNetworkSync : NetworkBehaviour
         if (slotIndex < 0 || slotIndex >= _serverData.activeSkills.Count) return;
 
         ActiveSkillType skill = _serverData.activeSkills[slotIndex];
+
+        // 서버 측 쿨다운 검증 — 클라이언트가 쿨다운을 무시하고 RPC를 반복 전송해도 서버에서 차단
+        float cd = SkillSystem.GetCooldown(skill);
+        if (_skillLastUsed.TryGetValue(skill, out float lastUsed) && Time.time - lastUsed < cd) return;
+        _skillLastUsed[skill] = Time.time;
+
         SkillSystem.ActivateSkillServer(skill, _controller, targetPos);
         BroadcastSkillVisualsClientRpc((int)skill, targetPos);
     }
@@ -585,6 +605,60 @@ public class PlayerNetworkSync : NetworkBehaviour
     }
 
     // ════════════════════════════════════════════════════════════
+    //  위치 강제 설정 RPC — ClientNetworkTransform 환경 전용
+    //
+    //  ClientNetworkTransform은 Owner 클라이언트가 위치 권한을 가지므로
+    //  서버에서 Rb.position을 직접 수정해도 클라이언트 값으로 롤백됩니다.
+    //  ShadowRaid(순간이동), ChargeStrike/Bulldozer(돌진), 넉백 등
+    //  이동을 수반하는 모든 스킬은 반드시 Owner 클라이언트에게 RPC로 지시해야 합니다.
+    // ════════════════════════════════════════════════════════════
+
+    [ClientRpc]
+    public void ForcePositionClientRpc(Vector2 pos, ClientRpcParams rpcParams = default)
+    {
+        if (!IsOwner) return;
+        _controller.Rb.position = pos;
+    }
+
+    [ClientRpc]
+    public void ForceMoveClientRpc(Vector2 from, Vector2 to, float duration, ClientRpcParams rpcParams = default)
+    {
+        if (!IsOwner) return;
+        StartCoroutine(ForceMoveCoroutine(from, to, duration));
+    }
+
+    private System.Collections.IEnumerator ForceMoveCoroutine(Vector2 from, Vector2 to, float duration)
+    {
+        float el = 0f;
+        while (el < duration)
+        {
+            el += Time.deltaTime;
+            _controller.Rb.MovePosition(Vector2.Lerp(from, to, Mathf.Clamp01(el / duration)));
+            yield return null;
+        }
+        _controller.Rb.position = to;
+    }
+
+    [ClientRpc]
+    public void ForceKnockbackClientRpc(Vector2 dir, float force, float duration, ClientRpcParams rpcParams = default)
+    {
+        if (!IsOwner) return;
+        StartCoroutine(KnockbackCoroutine(dir, force, duration));
+    }
+
+    private System.Collections.IEnumerator KnockbackCoroutine(Vector2 dir, float force, float duration)
+    {
+        float el = 0f;
+        while (el < duration)
+        {
+            el += Time.deltaTime;
+            _controller.Rb.MovePosition(_controller.Rb.position +
+                dir * force * (1f - el / duration) * Time.deltaTime);
+            yield return null;
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════
     //  내부 유틸
     // ════════════════════════════════════════════════════════════
 
@@ -607,7 +681,8 @@ public class PlayerNetworkSync : NetworkBehaviour
 
     private NetworkCharacterData BuildNetworkData()
     {
-        var d = _controller.myData ?? GameManager.Instance?.myCharacterData;
+        // OnNetworkSpawn 시점엔 myData가 프리팹 기본값일 수 있으므로 GameManager를 우선 (진짜 데이터)
+        var d = GameManager.Instance?.myCharacterData ?? _controller.myData;
         if (d == null) { Debug.LogWarning("[PlayerNetworkSync] CharacterData 없음, 기본값 전송"); return default; }
         return new NetworkCharacterData
         {
