@@ -78,7 +78,7 @@ public static class SkillSystem
                     OwnerRpcParams(caster.networkSync.OwnerClientId));
                 // 서버에서는 경로 전체를 CircleCast로 충돌 판정 (이동 없이 계산만)
                 yield return new WaitForSeconds(0.15f);
-                if (caster.networkSync.NetworkIsDead.Value) yield break;
+                if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
                 foreach (var h in Physics2D.CircleCastAll(orig, 0.8f, dir, 2.5f, caster.enemyLayer))
                 {
                     var t = h.collider.GetComponent<PlayerController>();
@@ -95,6 +95,7 @@ public static class SkillSystem
 
             case ActiveSkillType.EarthquakeStrike:
                 yield return new WaitForSeconds(0.1f);
+                if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
                 foreach (var t in GetEnemiesInRadius(caster, 3.5f))
                 {
                     DealSkillDamageServer(caster, t, cData.baseAtk * 2.0f);
@@ -170,6 +171,7 @@ public static class SkillSystem
 
             case ActiveSkillType.JudgmentHammer:
                 yield return new WaitForSeconds(0.3f);
+                if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
                 foreach (var t in GetEnemiesInRadius(caster, 1.2f, targetPos))
                 {
                     DealSkillDamageServer(caster, t, cData.baseAtk * 1.0f);
@@ -183,6 +185,7 @@ public static class SkillSystem
 
             case ActiveSkillType.PillarOfJudgment:
                 yield return new WaitForSeconds(0.6f);
+                if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
                 foreach (var t in GetEnemiesInRadius(caster, 1.5f, targetPos))
                     DealSkillDamageServer(caster, t, cData.baseAtk * 3.0f);
                 yield break;
@@ -223,8 +226,10 @@ public static class SkillSystem
             {
                 caster.networkSync.ApplyStatusEffectServer(StatusEffectType.BladeStormActive, 3f, 0f, caster.networkSync);
                 float el = 0f, next = 0.5f;
-                while (el < 3f && !caster.networkSync.NetworkIsDead.Value)
+                while (el < 3f)
                 {
+                    // 매 프레임 시전자 생존 여부 확인 (Despawn·사망 대응)
+                    if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
                     el += Time.deltaTime;
                     if (el >= next)
                     {
@@ -267,6 +272,7 @@ public static class SkillSystem
 
             case ActiveSkillType.Meteor:
                 yield return new WaitForSeconds(1f);
+                if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
                 foreach (var t in GetEnemiesInRadius(caster, 3.5f, targetPos))
                 {
                     DealSkillDamageServer(caster, t, cData.baseAtk * 2.5f);
@@ -307,6 +313,8 @@ public static class SkillSystem
                 float el = 0f, next = 0.5f;
                 while (el < 3f)
                 {
+                    // 매 프레임 시전자 생존 여부 확인
+                    if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
                     el += Time.deltaTime;
                     if (el >= next)
                     {
@@ -398,8 +406,10 @@ public static class SkillSystem
                 {
                     DealSkillDamageServer(caster, t, cData.baseAtk * 0.8f);
                     yield return new WaitForSeconds(0.15f);
-                    if (!t.networkSync.NetworkIsDead.Value)
-                        DealSkillDamageServer(caster, t, cData.baseAtk * 0.8f);
+                    // 0.15초 대기 후 시전자·대상 생존 여부 재확인
+                    if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
+                    if (t == null || t.networkSync == null || t.networkSync.NetworkIsDead.Value) yield break;
+                    DealSkillDamageServer(caster, t, cData.baseAtk * 0.8f);
                 }
                 yield break;
             }
@@ -414,6 +424,8 @@ public static class SkillSystem
                         DealSkillDamageServer(caster, t, cData.baseAtk * 0.6f);
                 }
                 yield return new WaitForSeconds(0.4f);
+                // 0.4초 대기 후 시전자 생존 여부 확인 (회부 진행 전 검증)
+                if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
                 foreach (var h in Physics2D.RaycastAll(caster.transform.position, -dir, 7f, caster.enemyLayer))
                 {
                     var t = h.collider.GetComponent<PlayerController>();
@@ -466,6 +478,8 @@ public static class SkillSystem
                 float el = 0f, nextTick = 0f;
                 while (el < 3f)
                 {
+                    // 매 프레임 시전자 생존 여부 확인
+                    if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
                     el += Time.deltaTime;
                     if (el >= nextTick)
                     {
@@ -487,6 +501,8 @@ public static class SkillSystem
 
             case ActiveSkillType.FeastTime:
                 yield return new WaitForSeconds(4f);
+                // 4초 대기 후 시전자 생존 여부 확인
+                if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
                 foreach (var t in GetEnemiesInRadius(caster, 3.0f, targetPos))
                     DealSkillDamageServer(caster, t, cData.baseAtk * 2.5f);
                 yield break;
@@ -555,6 +571,8 @@ public static class SkillSystem
         float el = 0f; bool triggered = false;
         while (el < 15f && !triggered)
         {
+            // 매 프레임 시전자 생존 여부 확인 (최대 15초 루프 중 Despawn·사망 대응)
+            if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
             el += Time.deltaTime;
             foreach (var col in Physics2D.OverlapCircleAll(trapPos, 0.6f, caster.enemyLayer))
             {

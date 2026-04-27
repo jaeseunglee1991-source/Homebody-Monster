@@ -2720,6 +2720,7 @@ CanvasRenderer:
 SceneRoots:
   m_ObjectHideFlags: 0
   m_Roots:
+  - {fileID: 519420032}
   - {fileID: 819230540}
   - {fileID: 561592571}
   - {fileID: 78938968}
@@ -2728,5 +2729,4 @@ SceneRoots:
   - {fileID: 1306424260}
   - {fileID: 784512729}
   - {fileID: 1588530300}
-  - {fileID: 519420032}
   - {fileID: 619394802}

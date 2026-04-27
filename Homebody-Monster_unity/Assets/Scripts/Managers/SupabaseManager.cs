@@ -64,7 +64,7 @@ public class SupabaseManager : MonoBehaviour
 
     private void EnsureMainThreadDispatcher()
     {
-        if (FindObjectOfType<MainThreadDispatcher>() == null)
+        if (FindFirstObjectByType<MainThreadDispatcher>() == null)
         {
             var go = new GameObject("[MainThreadDispatcher]");
             go.AddComponent<MainThreadDispatcher>();
@@ -416,8 +416,8 @@ public class SupabaseManager : MonoBehaviour
     /// <summary>로비 채팅 메시지 수신 시 발생하는 이벤트. (nickname, message)</summary>
     public event System.Action<string, string> OnLobbyChatReceived;
 
-    /// <summary>로비 접속자 수 변경 시 발생하는 이벤트. (count)</summary>
-    public event System.Action<int> OnLobbyPresenceCountChanged;
+    /// <summary>로비 접속자 목록 변경 시 발생하는 이벤트. (nicknames)</summary>
+    public event System.Action<List<string>> OnLobbyPresenceUpdated;
 
     private Supabase.Realtime.RealtimeChannel _lobbyChatChannel;
     private Supabase.Realtime.RealtimePresence<LobbyPresence> _lobbyPresence;
@@ -472,14 +472,9 @@ public class SupabaseManager : MonoBehaviour
             _lobbyPresence = _lobbyChatChannel.Register<LobbyPresence>(presenceKey);
 
             // Presence 이벤트 핸들러 (Sync/Join/Leave 모두 감지)
-            void UpdatePresenceCount(Supabase.Realtime.Interfaces.IRealtimePresence sender, Supabase.Realtime.Interfaces.IRealtimePresence.EventType type)
-            {
-                int count = _lobbyPresence.CurrentState?.Count ?? 0;
-                MainThreadDispatcher.Enqueue(() => OnLobbyPresenceCountChanged?.Invoke(count));
-            }
-            _lobbyPresence.AddPresenceEventHandler(Supabase.Realtime.Interfaces.IRealtimePresence.EventType.Sync, UpdatePresenceCount);
-            _lobbyPresence.AddPresenceEventHandler(Supabase.Realtime.Interfaces.IRealtimePresence.EventType.Join, UpdatePresenceCount);
-            _lobbyPresence.AddPresenceEventHandler(Supabase.Realtime.Interfaces.IRealtimePresence.EventType.Leave, UpdatePresenceCount);
+            _lobbyPresence.AddPresenceEventHandler(Supabase.Realtime.Interfaces.IRealtimePresence.EventType.Sync, OnPresenceEvent);
+            _lobbyPresence.AddPresenceEventHandler(Supabase.Realtime.Interfaces.IRealtimePresence.EventType.Join, OnPresenceEvent);
+            _lobbyPresence.AddPresenceEventHandler(Supabase.Realtime.Interfaces.IRealtimePresence.EventType.Leave, OnPresenceEvent);
 
             await _lobbyChatChannel.Subscribe();
             _isLobbyChannelSubscribed = true;
@@ -575,6 +570,28 @@ public class SupabaseManager : MonoBehaviour
     // ════════════════════════════════════════════════════════════
 
     /// <summary>
+    /// Presence 이벤트 핸들러. 모든 접속자의 닉네임을 추출하여 OnLobbyPresenceUpdated를 발생시킵니다.
+    /// SubscribeLobbyChat()과 TrackLobbyPresence() 양쪽에서 호출됩니다.
+    /// </summary>
+    private void OnPresenceEvent(Supabase.Realtime.Interfaces.IRealtimePresence sender, Supabase.Realtime.Interfaces.IRealtimePresence.EventType type)
+    {
+        var nicknames = new List<string>();
+        if (_lobbyPresence?.CurrentState != null)
+        {
+            foreach (var pair in _lobbyPresence.CurrentState)
+            {
+                foreach (var p in pair.Value)
+                {
+                    if (!string.IsNullOrEmpty(p.Nickname))
+                        nicknames.Add(p.Nickname);
+                }
+            }
+        }
+
+        MainThreadDispatcher.Enqueue(() => OnLobbyPresenceUpdated?.Invoke(nicknames));
+    }
+
+    /// <summary>
     /// 로비 Presence를 Track합니다. SubscribeLobbyChat() 완료 후, 닉네임 로드 후 호출하세요.
     /// </summary>
     public void TrackLobbyPresence(string nickname)
@@ -590,9 +607,8 @@ public class SupabaseManager : MonoBehaviour
             _lobbyPresence.Track(new LobbyPresence { Nickname = nickname });
             Debug.Log($"[Supabase] ✅ Presence 등록 완료: {nickname}");
 
-            // Track 직후 즉시 count 업데이트 (이벤트 대기 없이)
-            int count = _lobbyPresence.CurrentState?.Count ?? 0;
-            MainThreadDispatcher.Enqueue(() => OnLobbyPresenceCountChanged?.Invoke(count));
+            // Track 직후 즉시 리스트 업데이트 시도
+            OnPresenceEvent(null, Supabase.Realtime.Interfaces.IRealtimePresence.EventType.Sync);
         }
         catch (System.Exception e)
         {

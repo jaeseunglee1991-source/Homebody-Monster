@@ -99,7 +99,6 @@ public class CombatSystem : MonoBehaviour
         defender.tenacityUsed = true;
         defender.currentHp = 1f;
         defenderFX.ApplyEffect(StatusEffectType.TenacityShield, 1.5f);
-        Debug.Log($"[Passive] {defender.playerName} 불굴 발동! 1.5초 무적");
         return true;
     }
 
@@ -109,7 +108,6 @@ public class CombatSystem : MonoBehaviour
         if (!defenderFX.HasGuardianAngel) return false;
         defender.currentHp = defender.maxHp * 0.3f;
         defenderFX.RemoveEffect(StatusEffectType.GuardianAngel);
-        Debug.Log($"[Skill] {defender.playerName} 수호 천사 발동! HP {defender.currentHp:0.#}로 생존");
         return true;
     }
 
@@ -126,7 +124,6 @@ public class CombatSystem : MonoBehaviour
             {
                 float regenAmount = Mathf.Max(1.5f, data.maxHp * 0.05f);
                 data.currentHp = Mathf.Min(data.currentHp + regenAmount, data.maxHp);
-                Debug.Log($"[Passive] {data.playerName} 재생: +{regenAmount:0.#} HP");
             }
         }
     }

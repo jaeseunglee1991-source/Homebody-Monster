@@ -62,7 +62,6 @@ public class PlayerController : NetworkBehaviour
             if (vcam != null)
             {
                 vcam.Follow = transform;
-                Debug.Log($"[PlayerController] 🎥 시네머신 카메라 연결 성공: {vcam.name}");
             }
             else
             {

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using UnityEngine;
 using Unity.Netcode;
@@ -17,7 +18,7 @@ public class AppNetworkManager : MonoBehaviour
 
     // ── 이벤트 ─────────────────────────────────────────────────
     public event Action<string>       OnChatReceived;
-    public event Action<int>          OnPlayerListUpdated;   // 접속자 수만 전달 (상세 목록 불필요)
+    public event Action<List<string>> OnPlayerPresenceUpdated; // 상세 닉네임 목록 전달
     public event Action               OnClientConnected;
     public event Action<string>       OnClientDisconnected;  // 파라미터: 연결 해제 사유
 
@@ -98,7 +99,7 @@ public class AppNetworkManager : MonoBehaviour
         if (SupabaseManager.Instance != null)
         {
             SupabaseManager.Instance.OnLobbyChatReceived      -= HandleLobbyChatReceived;
-            SupabaseManager.Instance.OnLobbyPresenceCountChanged -= HandlePresenceCountChanged;
+            SupabaseManager.Instance.OnLobbyPresenceUpdated -= HandlePresenceUpdated;
             await SupabaseManager.Instance.UntrackLobbyPresence();
             await SupabaseManager.Instance.UnsubscribeLobbyChat();
         }
@@ -114,8 +115,8 @@ public class AppNetworkManager : MonoBehaviour
         {
             SupabaseManager.Instance.OnLobbyChatReceived         -= HandleLobbyChatReceived;      // 중복 방지
             SupabaseManager.Instance.OnLobbyChatReceived         += HandleLobbyChatReceived;
-            SupabaseManager.Instance.OnLobbyPresenceCountChanged -= HandlePresenceCountChanged;   // 중복 방지
-            SupabaseManager.Instance.OnLobbyPresenceCountChanged += HandlePresenceCountChanged;
+            SupabaseManager.Instance.OnLobbyPresenceUpdated      -= HandlePresenceUpdated;   // 중복 방지
+            SupabaseManager.Instance.OnLobbyPresenceUpdated      += HandlePresenceUpdated;
             await SupabaseManager.Instance.SubscribeLobbyChat();
 
             // 채널 구독 완료 후 닉네임이 이미 로드된 경우 즉시 Track
@@ -127,7 +128,7 @@ public class AppNetworkManager : MonoBehaviour
         else
         {
             Debug.LogWarning("[AppNetworkManager] Supabase 미초기화 — 로비 오프라인 모드");
-            OnPlayerListUpdated?.Invoke(1); // 오프라인 폴백
+            OnPlayerPresenceUpdated?.Invoke(new List<string>()); // 오프라인 폴백: 빈 리스트
         }
     }
 
@@ -140,9 +141,9 @@ public class AppNetworkManager : MonoBehaviour
         SupabaseManager.Instance?.TrackLobbyPresence(nickname);
     }
 
-    private void HandlePresenceCountChanged(int count)
+    private void HandlePresenceUpdated(List<string> nicknames)
     {
-        OnPlayerListUpdated?.Invoke(count);
+        OnPlayerPresenceUpdated?.Invoke(nicknames);
     }
 
     /// <summary>Supabase Realtime에서 수신한 채팅 메시지를 LobbyUIController로 전달합니다.</summary>
@@ -220,7 +221,7 @@ public class AppNetworkManager : MonoBehaviour
     /// </summary>
     private static PlayerController FindPlayerByClientId(ulong clientId)
     {
-        foreach (var obj in UnityEngine.Object.FindObjectsOfType<PlayerController>())
+        foreach (var obj in UnityEngine.Object.FindObjectsByType<PlayerController>(FindObjectsSortMode.None))
         {
             var netObj = obj.GetComponent<Unity.Netcode.NetworkObject>();
             if (netObj != null && netObj.OwnerClientId == clientId)

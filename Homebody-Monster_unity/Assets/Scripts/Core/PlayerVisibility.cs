@@ -47,7 +47,7 @@ public class PlayerVisibility : NetworkBehaviour
             Vector2 myPos = transform.position;
             
             // 씬 내의 모든 플레이어를 검색 (클라이언트 기기 호환성 해결)
-            PlayerController[] allPlayers = FindObjectsOfType<PlayerController>();
+            PlayerController[] allPlayers = FindObjectsByType<PlayerController>(FindObjectsSortMode.None);
 
             foreach (var enemyPc in allPlayers)
             {

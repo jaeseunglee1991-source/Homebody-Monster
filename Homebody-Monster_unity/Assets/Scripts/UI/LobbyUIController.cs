@@ -65,8 +65,8 @@ public class LobbyUIController : MonoBehaviour
         // 1. 네트워크(채팅/접속자) 이벤트 연결
         if (AppNetworkManager.Instance != null)
         {
-            AppNetworkManager.Instance.OnPlayerListUpdated += UpdateOnlineCountUI;
-            AppNetworkManager.Instance.OnChatReceived      += UpdateChatUI;
+            AppNetworkManager.Instance.OnPlayerPresenceUpdated += UpdatePlayerListDetail;
+            AppNetworkManager.Instance.OnChatReceived        += UpdateChatUI;
             AppNetworkManager.Instance.ConnectToLobby();
         }
 
@@ -136,8 +136,8 @@ public class LobbyUIController : MonoBehaviour
         // 🧹 씬 전환 시 참조 해제 (MissingReferenceException 에러 방지)
         if (AppNetworkManager.Instance != null)
         {
-            AppNetworkManager.Instance.OnPlayerListUpdated -= UpdateOnlineCountUI;
-            AppNetworkManager.Instance.OnChatReceived      -= UpdateChatUI;
+            AppNetworkManager.Instance.OnPlayerPresenceUpdated -= UpdatePlayerListDetail;
+            AppNetworkManager.Instance.OnChatReceived        -= UpdateChatUI;
 
             // Supabase Realtime 채팅 채널 구독 해제 (로비 전용이므로 씬 이탈 시 정리)
             AppNetworkManager.Instance.DisconnectLobbyChat();
@@ -272,7 +272,7 @@ public class LobbyUIController : MonoBehaviour
     private void UpdateOnlineCountUI(int count)
     {
         if (onlineCountText != null)
-            onlineCountText.text = $"🟢 현재 접속자: {count}명";
+            onlineCountText.text = $"현재 접속자: {count}명";
     }
 
     /// <summary>

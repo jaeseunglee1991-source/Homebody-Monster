@@ -256,7 +256,6 @@ public class StatusEffectSystem : MonoBehaviour
     {
         if (!HasDivineGrace) return false;
         RemoveEffect(StatusEffectType.DivineGrace);
-        Debug.Log($"[Status] {owner.myData?.playerName} 신의 가호로 공격 무효화!");
         return true;
     }
 

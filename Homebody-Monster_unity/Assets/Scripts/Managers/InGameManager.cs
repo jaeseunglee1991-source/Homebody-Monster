@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using System.Collections;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -45,11 +46,12 @@ public class InGameManager : MonoBehaviour
     public int AliveCount => alivePlayers.Count;
 
     private readonly List<PlayerController> alivePlayers = new List<PlayerController>();
+    // 클라이언트ID별 최종 순위 — OnPlayerDied 시점에 기록 (FinishGame 호출 시 alivePlayers.Count=1로 역산 불가)
+    private readonly Dictionary<ulong, int> _playerFinalRanks = new Dictionary<ulong, int>();
     private bool  gameEnded      = false;
     private float gameStartTime  = -1f; // NetworkManager.ServerTime 기준, -1 = 미설정
     private float cleanupTimer   = 0f;
-    // 로컬 플레이어 사망 시점의 순위를 즉시 기록.
-    // FinishGame 호출 시점엔 alivePlayers=1이어서 역산 불가 → 여기서 캡처.
+    // 하위 호환: 로컬(호스트) 플레이어 순위 캐시 (listen-server 환경에서 폴백용)
     private int _localPlayerFinalRank = 0;
 
     private void Awake()
@@ -113,9 +115,13 @@ public class InGameManager : MonoBehaviour
         alivePlayers.Remove(deadPlayer);
 
         // 사망 직후 생존자 수로 순위 즉시 기록 (alivePlayers.Count + 1)
-        // 예: 8명 중 내가 6번째 사망 → 제거 후 생존 2명 → 순위 3위
+        // 예: 8명 중 6번째 사망 → 제거 후 생존 2명 → 순위 3위
+        int rank = alivePlayers.Count + 1;
+        if (deadPlayer.networkSync != null)
+            _playerFinalRanks[deadPlayer.networkSync.OwnerClientId] = rank;
+
         if (deadPlayer.IsLocalPlayer)
-            _localPlayerFinalRank = alivePlayers.Count + 1;
+            _localPlayerFinalRank = rank;
 
         RefreshHUD();
         CheckWinCondition();
@@ -276,42 +282,42 @@ public class InGameManager : MonoBehaviour
 
     private IEnumerator FinishGame(PlayerController winner)
     {
-        PlayerController localPlayer = GetLocalPlayer();
-        bool isWinner  = winner != null && winner.IsLocalPlayer;
-        int  rank      = CalculateLocalRank(localPlayer);
-        int  kills     = localPlayer != null ? localPlayer.killCount : 0;
         float survived = GetSyncedTime() - gameStartTime;
 
-        if (GameManager.Instance != null)
-        {
-            GameManager.Instance.lastMatchResult = new MatchResult
-            {
-                isWinner = isWinner, rank = rank, killCount = kills, survivedTime = survived
-            };
-        }
-
+        // HUD 배너 표시 (listen-server 환경에서 호스트 화면용; 데디케이티드 서버는 HUD 없음)
         if (InGameHUD.Instance != null)
-            InGameHUD.Instance.ShowGameEndBanner(isWinner ? "최후의 1인! 승리!" : "탈락");
+        {
+            bool hostWins = winner != null && winner.IsLocalPlayer;
+            InGameHUD.Instance.ShowGameEndBanner(hostWins ? "최후의 1인! 승리!" : "탈락");
+        }
 
         yield return new WaitForSeconds(3f);
 
-        if (SupabaseManager.Instance != null)
-            _ = SaveResultAsync(isWinner, rank, kills, survived);
+        // ── 각 클라이언트에게 본인의 결과 전달 ──────────────────────
+        // • 데디케이티드 서버: IsOwner 플레이어 없음 → 서버에서 계산 불가
+        //   → ClientRpc로 각 Owner 클라이언트에게 전달, 수신 측에서 GameManager 저장 + Supabase 저장
+        // • listen-server: 호스트도 ClientRpc 수신 → 동일 경로로 처리
+        foreach (var p in FindObjectsByType<PlayerController>(FindObjectsSortMode.None))
+        {
+            if (p == null || p.networkSync == null) continue;
+            bool pIsWinner = winner != null && p == winner;
+            int  pRank = pIsWinner ? 1
+                : _playerFinalRanks.TryGetValue(p.networkSync.OwnerClientId, out int r) ? r
+                : alivePlayers.Count + 1; // 폴백: 아직 살아있다면 1위 근처
+            var rpcParams = new Unity.Netcode.ClientRpcParams
+            {
+                Send = new Unity.Netcode.ClientRpcSendParams
+                    { TargetClientIds = new[] { p.networkSync.OwnerClientId } }
+            };
+            p.networkSync.NotifyMatchResultClientRpc(pIsWinner, pRank, p.killCount, survived, rpcParams);
+        }
 
-        GameManager.Instance?.LoadScene("ResultScene");
-    }
-
-    private async Task SaveResultAsync(bool win, int rank, int kills, float time)
-    {
-        try { await SupabaseManager.Instance.SaveMatchResult(win, rank, kills, time); }
-        catch (System.Exception e) { Debug.LogError($"[InGameManager] 결과 저장 실패: {e.Message}"); }
-    }
-
-    private PlayerController GetLocalPlayer()
-    {
-        foreach (var p in FindObjectsOfType<PlayerController>())
-            if (p.IsLocalPlayer) return p;
-        return null;
+        // ── NGO SceneManager로 전체 씬 전환 ────────────────────────
+        // GameManager.LoadScene(로컬) 대신 NGO SceneManager 사용:
+        // 서버가 호출하면 연결된 모든 클라이언트가 동시에 씬을 전환합니다.
+        var netMgr = Unity.Netcode.NetworkManager.Singleton;
+        if (netMgr != null && netMgr.IsServer)
+            netMgr.SceneManager.LoadScene("ResultScene", LoadSceneMode.Single);
     }
 
     private PlayerController GetHighestHpPlayer()
@@ -323,13 +329,6 @@ public class InGameManager : MonoBehaviour
             { maxHp = p.myData.currentHp; best = p; }
         }
         return best;
-    }
-
-    private int CalculateLocalRank(PlayerController localPlayer)
-    {
-        if (alivePlayers.Contains(localPlayer)) return 1;
-        // 사망 시점에 기록한 순위 사용 (미기록 시 폴백: 생존자+1)
-        return _localPlayerFinalRank > 0 ? _localPlayerFinalRank : alivePlayers.Count + 1;
     }
 
     private void RefreshHUD()

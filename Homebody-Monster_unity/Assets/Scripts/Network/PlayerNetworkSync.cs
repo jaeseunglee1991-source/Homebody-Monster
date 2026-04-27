@@ -493,6 +493,39 @@ public class PlayerNetworkSync : NetworkBehaviour
         _controller.PlayDeathAnimation();
     }
 
+    /// <summary>
+    /// 서버 → 각 Owner 클라이언트: 본인의 매치 결과를 전달합니다.
+    /// InGameManager.FinishGame()에서 개별 OwnerClientId를 대상으로 호출됩니다.
+    ///
+    /// [설계 근거]
+    ///  • 데디케이티드 서버는 Supabase auth.uid()가 없어 SaveMatchResult 호출 불가
+    ///    → UseReviveTicket 위임 패턴(ReportReviveTicketResultServerRpc)과 동일한 구조
+    ///  • GameManager(DontDestroyOnLoad) 저장 + Supabase 저장을 Owner 측에서 수행
+    ///  • ClientRpcParams로 각 플레이어에게만 전송하므로 불필요한 브로드캐스트 없음
+    /// </summary>
+    [ClientRpc]
+    public void NotifyMatchResultClientRpc(bool isWinner, int rank, int kills, float survivedTime,
+        ClientRpcParams rpcParams = default)
+    {
+        if (!IsOwner) return;
+        if (GameManager.Instance == null) return;
+
+        GameManager.Instance.lastMatchResult = new MatchResult
+        {
+            isWinner = isWinner, rank = rank, killCount = kills, survivedTime = survivedTime
+        };
+
+        // Supabase 저장은 인증 세션을 가진 Owner(클라이언트)에서 수행
+        if (SupabaseManager.Instance != null)
+            _ = SaveMatchResultAsync(isWinner, rank, kills, survivedTime);
+    }
+
+    private async Task SaveMatchResultAsync(bool win, int rank, int kills, float time)
+    {
+        try { await SupabaseManager.Instance.SaveMatchResult(win, rank, kills, time); }
+        catch (System.Exception e) { Debug.LogError($"[PlayerNetworkSync] 결과 저장 실패: {e.Message}"); }
+    }
+
     // ════════════════════════════════════════════════════════════
     //  스킬 / 상태이상 (서버에서 호출)
     // ════════════════════════════════════════════════════════════
