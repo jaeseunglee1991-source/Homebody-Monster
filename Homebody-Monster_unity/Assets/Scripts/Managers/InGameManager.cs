@@ -62,6 +62,10 @@ public class InGameManager : MonoBehaviour
 
     private void Start()
     {
+        // 게임 시작 카운트다운은 서버가 단독으로 주도합니다.
+        // 순수 클라이언트는 NetworkSpawnManager.NotifyGameStartedClientRpc 수신 후 시작 상태로 전환됩니다.
+        var netMgr = Unity.Netcode.NetworkManager.Singleton;
+        if (netMgr != null && netMgr.IsListening && !netMgr.IsServer) return;
         StartCoroutine(GameStartSequence());
     }
 
@@ -191,38 +195,36 @@ public class InGameManager : MonoBehaviour
     }
 
     // ════════════════════════════════════════════════════════════
-    //  게임 시작 시퀀스
+    //  게임 시작 시퀀스 (서버 전용)
     // ════════════════════════════════════════════════════════════
 
     private IEnumerator GameStartSequence()
     {
+        // 접속 대기 — 매 1초마다 메시지 갱신 (RPC 과부하 방지)
         float waitTime = 0f;
         while (alivePlayers.Count < minPlayers && waitTime < 15f)
         {
-            waitTime += Time.deltaTime;
-            ShowStatusMessage($"다른 생존자 접속 대기 중... ({alivePlayers.Count}/{maxPlayers})");
-            yield return null;
+            BroadcastOrShowMessage($"다른 생존자 접속 대기 중... ({alivePlayers.Count}/{maxPlayers})");
+            yield return new WaitForSeconds(1f);
+            waitTime += 1f;
         }
 
         float extraWait = 0f;
         while (alivePlayers.Count < maxPlayers && extraWait < 3f)
         {
-            extraWait += Time.deltaTime;
-            ShowStatusMessage($"게임 준비 중... ({alivePlayers.Count}/{maxPlayers})");
-            yield return null;
+            BroadcastOrShowMessage($"게임 준비 중... ({alivePlayers.Count}/{maxPlayers})");
+            yield return new WaitForSeconds(1f);
+            extraWait += 1f;
         }
 
         for (int i = 5; i > 0; i--)
         {
-            ShowStatusMessage($"게임 시작 {i}초 전!");
+            BroadcastOrShowMessage($"게임 시작 {i}초 전!");
             yield return new WaitForSeconds(1f);
         }
-        ShowStatusMessage("START!");
+        BroadcastOrShowMessage("START!");
 
-        // 스폰 위치 배정은 NetworkSpawnManager가 서버 권한으로 단독 처리.
-        // 여기서 transform.position을 덮어쓰면 NGO 권한 모델과 충돌하고
-        // 클라이언트 측 실행 시 인원 수 불일치로 (0,0,0) 워프가 발생할 수 있음.
-
+        // 서버(= listen-server 호스트 포함)의 플레이어 잠금 해제
         foreach (var p in alivePlayers)
         {
             if (p != null && !p.IsDead)
@@ -233,24 +235,65 @@ public class InGameManager : MonoBehaviour
         }
 
         isGameActive     = true;
-        gameStartTime    = GetSyncedTime(); // 모든 클라이언트가 동일한 네트워크 기준 시간 사용
+        gameStartTime    = GetSyncedTime();
         ElapsedGameTime  = 0f;
-        MatchReviveUsedCount = 0; // 게임 시작 시 카운터 초기화
+        MatchReviveUsedCount = 0;
 
-        // ── 모든 플레이어의 부활권 상태 초기화 ──────────────────────
+        // ── 서버에서 부활권 NetworkVariable 초기화 ──────────────────
         foreach (var player in alivePlayers)
         {
             if (player?.networkSync != null)
-            {
                 player.networkSync.ResetReviveStateForNewMatch();
-            }
         }
 
+        // ── 모든 클라이언트에 서버 기준 시작 시간 전달 ──────────────
+        if (NetworkSpawnManager.Instance != null)
+            NetworkSpawnManager.Instance.NotifyGameStartedClientRpc(gameStartTime);
+
         yield return new WaitForSeconds(1f);
-        HideStatusMessage();
+
+        if (NetworkSpawnManager.Instance != null)
+            NetworkSpawnManager.Instance.HideCountdownClientRpc();
+        else
+            HideStatusMessage();
 
         if (timeLimitSeconds > 0f)
             StartCoroutine(TimeLimitRoutine());
+    }
+
+    /// <summary>
+    /// 서버의 NetworkSpawnManager.NotifyGameStartedClientRpc에서 호출됩니다.
+    /// 순수 클라이언트가 서버와 게임 시작 상태를 동기화합니다.
+    /// </summary>
+    public void ClientReceiveGameStart(float serverStartTime)
+    {
+        // listen-server 호스트는 GameStartSequence에서 이미 처리했으므로 건너뜀
+        var netMgr = Unity.Netcode.NetworkManager.Singleton;
+        if (netMgr != null && netMgr.IsServer) return;
+
+        isGameActive     = true;
+        gameStartTime    = serverStartTime;
+        ElapsedGameTime  = 0f;
+        MatchReviveUsedCount = 0;
+
+        // 로컬 소유 플레이어 잠금 해제
+        foreach (var p in alivePlayers)
+        {
+            if (p != null && !p.IsDead)
+            {
+                p.SetMovementLocked(false);
+                p.SetAttackLocked(false);
+            }
+        }
+    }
+
+    /// <summary>멀티: NetworkSpawnManager ClientRpc, 오프라인 폴백: 로컬 HUD 직접 출력</summary>
+    private void BroadcastOrShowMessage(string message)
+    {
+        if (NetworkSpawnManager.Instance != null)
+            NetworkSpawnManager.Instance.ShowCountdownClientRpc(message);
+        else
+            ShowStatusMessage(message);
     }
 
     private void ShowStatusMessage(string message)

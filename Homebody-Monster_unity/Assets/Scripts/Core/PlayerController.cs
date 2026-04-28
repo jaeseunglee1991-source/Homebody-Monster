@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.EventSystems;
 using System.Collections;
+using System.Collections.Generic;
 using Unity.Netcode;
 
 [RequireComponent(typeof(Rigidbody2D))]
@@ -57,21 +58,23 @@ public class PlayerController : NetworkBehaviour
         base.OnNetworkSpawn();
         if (IsOwner)
         {
-            // 시네머신 카메라 자동 연결 (3.x 버전 대응 강화)
-            var vcam = FindFirstObjectByType<Unity.Cinemachine.CinemachineCamera>();
-            if (vcam != null)
-            {
-                vcam.Follow = transform;
-            }
-            else
-            {
-                Debug.LogWarning("[PlayerController] ⚠️ 씬에서 CinemachineCamera를 찾을 수 없습니다.");
-            }
+            // CameraFollowLocalPlayer 스크립트가 CinemachineCamera에서 로컬 플레이어를 자동 추적합니다.
+            // 이곳에서 중복 설정하면 Cinemachine 3.x에서 두 번 할당이 발생하므로 제거.
+
+            // New Input System 터치 지원 활성화
+            UnityEngine.InputSystem.EnhancedTouch.EnhancedTouchSupport.Enable();
 
             // 동적 스폰 시 씬에 배치된 조이스틱을 자동으로 연결
             if (movementJoystick == null)
                 movementJoystick = FindFirstObjectByType<VariableJoystick>();
         }
+    }
+
+    public override void OnNetworkDespawn()
+    {
+        base.OnNetworkDespawn();
+        if (IsOwner)
+            UnityEngine.InputSystem.EnhancedTouch.EnhancedTouchSupport.Disable();
     }
 
     private void Start()
@@ -134,14 +137,16 @@ public class PlayerController : NetworkBehaviour
 
     private void HandleTouchAttackInput()
     {
-        if (attackLocked || Input.touchCount == 0) return;
-        foreach (Touch touch in Input.touches)
+        var activeTouches = UnityEngine.InputSystem.EnhancedTouch.Touch.activeTouches;
+        if (attackLocked || activeTouches.Count == 0) return;
+
+        foreach (var touch in activeTouches)
         {
-            if (touch.phase != TouchPhase.Began) continue;
+            if (touch.phase != UnityEngine.InputSystem.TouchPhase.Began) continue;
             // UI(버튼, 조이스틱 등) 위를 터치했을 때 평타 오발 방지
-            if (EventSystem.current != null &&
-                EventSystem.current.IsPointerOverGameObject(touch.fingerId)) continue;
-            Vector2 worldPos = mainCam.ScreenToWorldPoint(touch.position);
+            if (IsTouchOverUI(touch.screenPosition)) continue;
+
+            Vector2 worldPos = mainCam.ScreenToWorldPoint(touch.screenPosition);
             var col = Physics2D.OverlapPoint(worldPos, enemyLayer);
             if (col != null)
             {
@@ -153,6 +158,19 @@ public class PlayerController : NetworkBehaviour
                 }
             }
         }
+    }
+
+    // PointerEventData 기반 UI 히트 테스트 — New Input System과 호환
+    private static readonly List<UnityEngine.EventSystems.RaycastResult> _uiRaycastResults
+        = new List<UnityEngine.EventSystems.RaycastResult>();
+
+    private static bool IsTouchOverUI(Vector2 screenPos)
+    {
+        if (EventSystem.current == null) return false;
+        var pe = new PointerEventData(EventSystem.current) { position = screenPos };
+        _uiRaycastResults.Clear();
+        EventSystem.current.RaycastAll(pe, _uiRaycastResults);
+        return _uiRaycastResults.Count > 0;
     }
 
     private void SetAttackTarget(PlayerController enemy)

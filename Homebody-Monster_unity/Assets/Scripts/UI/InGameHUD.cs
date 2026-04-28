@@ -245,6 +245,10 @@ public class InGameHUD : MonoBehaviour
 
     private IEnumerator ReviveCountdown(float duration)
     {
+        // [Fix #8] 매 프레임(yield return null)에서 0.5초 간격으로 변경.
+        // UpdateReviveInfoText()의 불필요한 매 프레임 연산을 줄이고,
+        // 카운트다운 숫자는 0.5초 단위로 갱신해도 사용자가 체감하지 못합니다.
+        var halfSecWait = new WaitForSeconds(0.5f);
         float timer = duration;
         while (timer > 0f)
         {
@@ -254,8 +258,8 @@ public class InGameHUD : MonoBehaviour
             // 카운트다운 중에도 정보 텍스트 갱신
             UpdateReviveInfoText();
 
-            yield return null;
-            timer -= Time.deltaTime;
+            yield return halfSecWait;
+            timer -= 0.5f;
         }
         // 5초 만료 → 서버 타임아웃 코루틴이 킬 처리, UI만 닫음
         HideReviveUI();

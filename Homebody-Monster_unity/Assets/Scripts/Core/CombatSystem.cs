@@ -2,11 +2,24 @@ using UnityEngine;
 
 public class CombatSystem : MonoBehaviour
 {
+    /// <summary>
+    /// 기본 평타 데미지 계산. baseAtk를 출발점으로 사용합니다.
+    /// </summary>
     public static DamageResult CalculateDamage(CharacterData attacker, CharacterData defender,
         StatusEffectSystem attackerFX, StatusEffectSystem defenderFX)
+        => CalculateDamageWithOverride(attacker, defender, attacker.baseAtk, attackerFX, defenderFX);
+
+    /// <summary>
+    /// [Fix #2] 투사체 / 스킬처럼 고정 데미지값을 쓰는 경우에 사용합니다.
+    /// overrideDamage를 baseAtk 대신 출발점으로 사용하며, 나머지 모든 패시브·상성 로직은 동일합니다.
+    /// NetworkProjectile처럼 여러 투사체가 같은 프레임에 충돌할 때 baseAtk를 임시로 교체하고
+    /// 복구하는 패턴(레이스 컨디션)을 완전히 대체합니다.
+    /// </summary>
+    public static DamageResult CalculateDamageWithOverride(CharacterData attacker, CharacterData defender,
+        float overrideDamage, StatusEffectSystem attackerFX, StatusEffectSystem defenderFX)
     {
         var result = new DamageResult();
-        float dmg = attacker.baseAtk;
+        float dmg = overrideDamage;
 
         if (attackerFX != null) dmg *= attackerFX.GetAtkMultiplier();
 

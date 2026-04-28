@@ -71,6 +71,15 @@ public class NetworkSpawnManager : NetworkBehaviour
     private void HandleClientConnected(ulong clientId)
     {
         if (!IsServer) return;
+
+        // [Fix #3] 게임 시작 후 접속한 클라이언트는 스폰하지 않고 즉시 연결 차단
+        if (_gameStarted)
+        {
+            Debug.LogWarning($"[NetworkSpawnManager] 게임 진행 중 접속 시도(clientId={clientId}) → 연결 차단");
+            NetworkManager.Singleton.DisconnectClient(clientId);
+            return;
+        }
+
         SpawnPlayer(clientId);
     }
 
@@ -117,7 +126,16 @@ public class NetworkSpawnManager : NetworkBehaviour
         netObj.SpawnAsPlayerObject(clientId, destroyWithScene: true);
 
         var sync = obj.GetComponent<PlayerNetworkSync>();
-        if (sync != null) _players[clientId] = sync;
+        if (sync != null)
+        {
+            _players[clientId] = sync;
+        }
+        else
+        {
+            // [Fix #9] sync가 null이면 WaitForPlayersRoutine의 카운트 집계가 어긋나므로 명시적으로 기록
+            Debug.LogError($"[NetworkSpawnManager] playerPrefab에 PlayerNetworkSync 컴포넌트가 없습니다! " +
+                           $"(clientId={clientId}) → _players에 등록되지 않음. WaitForPlayersRoutine 카운트 불일치 발생 가능.");
+        }
 
         Debug.Log($"[NetworkSpawnManager] 🎮 플레이어 스폰: clientId={clientId}, pos={spawnPos}");
     }
@@ -169,6 +187,31 @@ public class NetworkSpawnManager : NetworkBehaviour
     {
         Debug.Log($"[NetworkSpawnManager] 🚀 게임 시작! 총 {totalPlayers}명");
         InGameHUD.Instance?.SetGameStarted(totalPlayers);
+    }
+
+    /// <summary>서버 → 클라이언트: 카운트다운 메시지를 HUD 배너에 표시합니다.</summary>
+    [ClientRpc]
+    public void ShowCountdownClientRpc(string message)
+    {
+        InGameHUD.Instance?.ShowGameEndBanner(message);
+    }
+
+    /// <summary>
+    /// 서버 → 클라이언트: 게임이 정식 시작됨을 알리고 서버 시작 시간을 전달합니다.
+    /// InGameManager.ClientReceiveGameStart()를 호출해 클라이언트 상태를 동기화합니다.
+    /// </summary>
+    [ClientRpc]
+    public void NotifyGameStartedClientRpc(float serverStartTime)
+    {
+        InGameManager.Instance?.ClientReceiveGameStart(serverStartTime);
+    }
+
+    /// <summary>서버 → 클라이언트: 카운트다운 배너를 숨깁니다.</summary>
+    [ClientRpc]
+    public void HideCountdownClientRpc()
+    {
+        if (InGameHUD.Instance?.endBannerPanel != null)
+            InGameHUD.Instance.endBannerPanel.SetActive(false);
     }
 
     // ════════════════════════════════════════════════════════════

@@ -38,6 +38,8 @@ public class SettingsUIController : MonoBehaviour
     private void Start()
     {
         // 버튼 이벤트 연결 (Inspector에서 해도 무방하나, 코드로 보장)
+        // [Fix #7] openButton Inspector 연결이 누락되어도 코드에서 보장
+        openButton?.onClick.AddListener(OpenSettings);
         closeButton?.onClick.AddListener(CloseSettings);
 
         // 슬라이더·토글 이벤트 연결

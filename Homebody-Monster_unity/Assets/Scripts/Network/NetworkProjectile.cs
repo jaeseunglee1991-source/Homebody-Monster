@@ -105,19 +105,17 @@ public class NetworkProjectile : NetworkBehaviour
         
         if (ownerController == null || targetController == null) return;
 
-        // 스킬 데미지 배율을 적용하기 위해 잠시 baseAtk를 치환 (유니티는 싱글 스레드라 안전함)
-        float originalAtk = _ownerSync.ServerData.baseAtk;
-        _ownerSync.ServerData.baseAtk = _damage;
-
-        // 기존 CombatSystem을 거쳐 상성 및 패시브 모두 적용
-        DamageResult result = CombatSystem.CalculateDamage(
+        // [Fix #2] baseAtk 임시 교체 패턴 제거 — 레이스 컨디션 방지.
+        // 같은 소유자의 투사체가 같은 프레임에 여러 개 충돌하면 baseAtk 복구 전에
+        // 다른 투사체가 덮어쓰는 경쟁 상태가 발생했었음.
+        // CalculateDamageWithOverride로 overrideDamage를 직접 전달하여 해결.
+        DamageResult result = CombatSystem.CalculateDamageWithOverride(
             _ownerSync.ServerData,
             targetSync.ServerData,
+            _damage,
             ownerController.StatusFX,
             targetController.StatusFX
         );
-
-        _ownerSync.ServerData.baseAtk = originalAtk; // 원상 복구
 
         // [중요] result를 전달하여 UI 데미지 팝업(MISS, CRITICAL 등)이 표시되도록 연동
         if (!result.isEvaded && !result.isDivineGraceBlocked && result.finalDamage > 0f)

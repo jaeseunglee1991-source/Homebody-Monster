@@ -68,8 +68,11 @@ public class PlayerNetworkSync : NetworkBehaviour
         0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     public readonly NetworkVariable<bool> NetworkIsDead = new(
         false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    // [Fix #1] Owner 쓰기 권한 제거 → Server 권한으로 변경하여 클라이언트 위변조 차단.
+    // 닉네임은 SubmitCharacterDataServerRpc의 파라미터로 직접 전달되므로
+    // NetworkVariable 동기화 타이밍 버그도 함께 해결됩니다.
     public readonly NetworkVariable<FixedString64Bytes> NetworkNickname = new(
-        default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
+        default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
     // ── 서버 전용 상태 ──────────────────────────────────────────
     private CharacterData      _serverData;
@@ -110,11 +113,13 @@ public class PlayerNetworkSync : NetworkBehaviour
 
         if (IsOwner)
         {
-            NetworkNickname.Value = new FixedString64Bytes(
-                GameManager.Instance?.currentPlayerNickname
+            // [Fix #1] NetworkNickname.Value를 먼저 쓰고 ServerRpc를 보내면
+            // NetworkVariable 동기화가 RPC보다 늦게 도달하여 playerName이 빈 문자열이 됩니다.
+            // 닉네임을 RPC 파라미터로 직접 전달하여 타이밍 버그를 해결합니다.
+            string nicknameValue = GameManager.Instance?.currentPlayerNickname
                 ?? GameManager.Instance?.currentPlayerId
-                ?? $"Player_{OwnerClientId}");
-            SubmitCharacterDataServerRpc(BuildNetworkData());
+                ?? $"Player_{OwnerClientId}";
+            SubmitCharacterDataServerRpc(BuildNetworkData(), new FixedString64Bytes(nicknameValue));
         }
 
         InGameManager.Instance?.RegisterPlayer(_controller);
@@ -159,7 +164,7 @@ public class PlayerNetworkSync : NetworkBehaviour
     // ════════════════════════════════════════════════════════════
 
     [ServerRpc]
-    private void SubmitCharacterDataServerRpc(NetworkCharacterData netData)
+    private void SubmitCharacterDataServerRpc(NetworkCharacterData netData, FixedString64Bytes nickname)
     {
         // StatCalculator 이론 최댓값 기준 범위 검증 (개조 클라이언트 maxHp=9999 등 차단)
         // HP 최댓값: 50 * (1+9*0.111) * 1.4 ≈ 140, ATK 최댓값: 5.0 * 2.0 * 1.5 ≈ 15
@@ -169,11 +174,14 @@ public class PlayerNetworkSync : NetworkBehaviour
                              $"(HP={netData.MaxHp:0.#}, ATK={netData.BaseAtk:0.#})");
             return;
         }
-        _serverData        = netData.ToCharacterData();
-        // 닉네임은 NetworkNickname을 통해 별도 동기화되므로 서버에서 주입
-        _serverData.playerName = NetworkNickname.Value.ToString();
-        NetworkHp.Value    = _serverData.maxHp;
-        NetworkMaxHp.Value = _serverData.maxHp;
+        _serverData = netData.ToCharacterData();
+        // [Fix #1] 닉네임을 RPC 파라미터로 직접 수신.
+        // NetworkVariable 동기화보다 RPC가 먼저 도달하는 타이밍 버그를 해결하며,
+        // 서버에서 NetworkNickname을 설정하므로 클라이언트 위변조도 차단합니다.
+        _serverData.playerName = nickname.ToString();
+        NetworkNickname.Value  = nickname;
+        NetworkHp.Value        = _serverData.maxHp;
+        NetworkMaxHp.Value     = _serverData.maxHp;
     }
 
     private static bool IsValidCharacterData(NetworkCharacterData d)
@@ -224,15 +232,22 @@ public class PlayerNetworkSync : NetworkBehaviour
         targetSync.NotifyHitClientRpc(result);
 
         // 1순위: 타겟 사망 체크 (일반 공격 흐름)
+        // [Fix 신규-C] NetworkIsDead를 먼저 true로 설정하여 같은 프레임 이중 ProcessDeath 차단
         if (newHp <= 0f && !targetSync.NetworkIsDead.Value)
+        {
+            targetSync.NetworkIsDead.Value = true;
             ProcessDeath(targetSync, attackerFx, targetFx);
+        }
 
         // [버그 수정] 2순위: 가시갑옥(Thorns) 반사로 공격자 HP가 0 이하가 된 경우
         // PostDamageEffects는 _serverData.currentHp만 수정하므로 ProcessDeath가 호출되지 않았음.
         // 원래 공격 데미지를 타겟에게 적용한 이후에 순차적으로 처리합니다.
         // (공격자가 Thorns로 죽어도 원래 타격은 이미 위에서 타겟에 반영됨)
         if (NetworkHp.Value <= 0f && !NetworkIsDead.Value)
+        {
+            NetworkIsDead.Value = true;
             targetSync.ProcessDeath(this, targetFx, attackerFx);
+        }
     }
 
     // ════════════════════════════════════════════════════════════
@@ -241,12 +256,22 @@ public class PlayerNetworkSync : NetworkBehaviour
 
     private void ProcessDeath(PlayerNetworkSync target, StatusEffectSystem attackerFx, StatusEffectSystem targetFx)
     {
+        // NetworkIsDead.Value는 호출 측(RequestAttackServerRpc / ApplyDamageServer)에서 이미 true로 설정됩니다.
+        // Guardian Angel / Tenacity 발동 시에는 false로 복구하여 생존 처리합니다.
         if (CombatSystem.TryGuardianAngel(target._serverData, targetFx))
-        { target.NetworkHp.Value = target._serverData.currentHp; return; }
+        {
+            target.NetworkIsDead.Value = false;
+            target.NetworkHp.Value     = target._serverData.currentHp;
+            return;
+        }
         if (CombatSystem.TryTenacity(target._serverData, targetFx))
-        { target.NetworkHp.Value = target._serverData.currentHp; return; }
+        {
+            target.NetworkIsDead.Value = false;
+            target.NetworkHp.Value     = target._serverData.currentHp;
+            return;
+        }
 
-        target.NetworkIsDead.Value = true;
+        // NetworkIsDead.Value는 이미 true — 중복 설정하지 않음
         target.DeclareDeathClientRpc(NetworkObject.NetworkObjectId);
 
         bool canRevive = CanOfferRevive(target);
@@ -421,7 +446,10 @@ public class PlayerNetworkSync : NetworkBehaviour
         }
         else
         {
-            success = true;
+            // [Fix #5] SupabaseManager 없음 = 인증 불가 → 부활 불허
+            // 이전 코드는 success = true 로 두어 부활권 없이 무료 부활이 가능했음.
+            success = false;
+            Debug.LogError("[PlayerNetworkSync] SupabaseManager 인스턴스가 없어 티켓 차감 불가 → 부활 거부");
         }
 
         // await 이후 Despawn 방어
@@ -548,8 +576,10 @@ public class PlayerNetworkSync : NetworkBehaviour
 
         NotifyHitClientRpc(result);
 
+        // [Fix #11] NetworkIsDead를 먼저 true로 설정하여 같은 프레임 이중 ProcessDeath 차단
         if (newHp <= 0f && !NetworkIsDead.Value)
         {
+            NetworkIsDead.Value = true;
             var effectiveAttacker = source ?? this;
             effectiveAttacker.ProcessDeath(this, effectiveAttacker._controller.StatusFX, _controller.StatusFX);
         }

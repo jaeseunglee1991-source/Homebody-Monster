@@ -56,9 +56,13 @@ public class ResultController : MonoBehaviour
         // ── NGO 연결 정리 (인게임 → 결과 씬 전환 시) ──────────
         CleanupNetcodeConnection();
 
-        // ── 채팅 이벤트 연결 ──────────────────────────────────
+        // ── 채팅 이벤트 연결 + 로비 채팅 채널 접속 ──────────────
         if (AppNetworkManager.Instance != null)
+        {
             AppNetworkManager.Instance.OnChatReceived += UpdateChatUI;
+            // [Fix #4] 이벤트 구독 이후에 ConnectToLobby 호출해야 이미 수신된 메시지가 누락되지 않음
+            AppNetworkManager.Instance.ConnectToLobby();
+        }
 
         DisplayMatchResult();
         StartCoroutine(FadeInSequence());
@@ -94,7 +98,11 @@ public class ResultController : MonoBehaviour
     private void OnDestroy()
     {
         if (AppNetworkManager.Instance != null)
+        {
             AppNetworkManager.Instance.OnChatReceived -= UpdateChatUI;
+            // [Fix #4] 씬 전환 시 채팅 채널 구독 해제 — 리소스 누수 및 이벤트 중복 방지
+            AppNetworkManager.Instance.DisconnectLobbyChat();
+        }
     }
 
     // ════════════════════════════════════════════════════════════

@@ -102,12 +102,25 @@ public class LobbyUIController : MonoBehaviour
 
     /// <summary>
     /// Supabase에서 최신 프로필 정보를 가져와 UI에 반영합니다.
+    /// [Fix #6] async void 래퍼 + async Task 본체 패턴:
+    ///  - async void는 예외를 삼키기 때문에 로직 본체를 별도 Task 메서드로 분리합니다.
+    ///  - await 전후에 this == null 체크를 추가하여 씬 전환 중 MissingReferenceException을 방어합니다.
     /// </summary>
     public async void RefreshUserProfileUI()
     {
+        await RefreshUserProfileUIAsync();
+    }
+
+    private async System.Threading.Tasks.Task RefreshUserProfileUIAsync()
+    {
+        if (this == null) return; // 씬 전환으로 이미 파괴된 경우 조기 종료
         if (SupabaseManager.Instance == null || string.IsNullOrEmpty(GameManager.Instance?.currentPlayerId)) return;
 
-        var profile = await SupabaseManager.Instance.GetOrCreateProfile(GameManager.Instance.currentPlayerId);
+        string playerId = GameManager.Instance.currentPlayerId;
+        var profile = await SupabaseManager.Instance.GetOrCreateProfile(playerId);
+
+        if (this == null) return; // await 도중 씬이 전환되어 오브젝트가 파괴된 경우 방어
+
         if (profile != null)
         {
             if (nicknameText != null) nicknameText.text = profile.Nickname;
@@ -115,8 +128,11 @@ public class LobbyUIController : MonoBehaviour
             if (reviveTicketCountText != null) reviveTicketCountText.text = $"{profile.ReviveTicketCount}";
 
             // GameManager 캐시 업데이트
-            GameManager.Instance.currentPlayerNickname = profile.Nickname; // 채팅용 닉네임 저장
-            GameManager.Instance.reviveTicketCount = profile.ReviveTicketCount;
+            if (GameManager.Instance != null)
+            {
+                GameManager.Instance.currentPlayerNickname = profile.Nickname; // 채팅용 닉네임 저장
+                GameManager.Instance.reviveTicketCount = profile.ReviveTicketCount;
+            }
 
             // Supabase Presence 등록 — 닉네임 확보 후 호출해야 올바른 식별자로 등록됨
             AppNetworkManager.Instance?.TrackLobbyPresence(profile.Nickname);
