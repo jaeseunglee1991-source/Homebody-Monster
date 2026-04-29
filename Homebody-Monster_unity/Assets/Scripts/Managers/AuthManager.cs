@@ -240,7 +240,7 @@ public class AuthManager : MonoBehaviour
             else
             {
                 Debug.Log("[Auth] Valid profile found. Entering lobby.");
-                EnterLobby(profile.Nickname);
+                EnterLobby(uid, profile.Nickname);
             }
         }
         catch (System.Exception e)
@@ -321,7 +321,7 @@ public class AuthManager : MonoBehaviour
             }
 
             Debug.Log($"[Auth] 닉네임 설정 완료: {newName}");
-            EnterLobby(uid); // 💡 중요: 닉네임이 아닌 고유 ID(UID)를 전달해야 로비에서 정보를 읽어옵니다.
+            EnterLobby(uid, newName);
         }
         catch (System.Exception e)
         {
@@ -389,12 +389,13 @@ public class AuthManager : MonoBehaviour
         if (errorText != null) errorText.text = "";
     }
 
-    private void EnterLobby(string uid)
+    private void EnterLobby(string uid, string nickname)
     {
         if (GameManager.Instance != null)
         {
-            Debug.Log($"[Auth] Transitioning to LobbyScene with UID: {uid}");
+            Debug.Log($"[Auth] 로비 진입 — UID: {uid}, 닉네임: {nickname}");
             GameManager.Instance.currentPlayerId = uid;
+            GameManager.Instance.currentPlayerNickname = nickname;
             GameManager.Instance.LoadScene("LobbyScene");
         }
         else

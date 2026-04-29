@@ -1,11 +1,11 @@
 using UnityEngine;
-using UnityEngine.UI;
+using TMPro;
 using System.Collections;
 
 public class DamagePopup : MonoBehaviour
 {
     [Header("References")]
-    public Text displayText; 
+    public TextMeshProUGUI displayText; 
 
     [Header("Animation Settings")]
     public float riseSpeed   = 1.2f;   

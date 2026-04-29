@@ -53,6 +53,10 @@ public class MatchmakingManager : MonoBehaviour
     [Tooltip("게임 서버 포트. 커맨드라인 -port로 재정의됩니다.")]
     public ushort myServerPort           = AppNetworkManager.DefaultPort;
 
+    [Header("씬 전환 딜레이")]
+    [Tooltip("매칭 DB 업데이트 후 클라이언트들이 ConnectToGameServer를 완료할 때까지 대기하는 시간.")]
+    public float sceneLoadDelaySeconds = 3f;
+
     // ── 클라이언트 이벤트 ──────────────────────────────────────
     public event Action<int, int> OnQueueCountChanged;
     public event Action<float>    OnTimerUpdated;
@@ -232,11 +236,15 @@ public class MatchmakingManager : MonoBehaviour
             };
             await SupabaseManager.Instance.Client.Rpc<string>("server_assign_match", param);
 
-            // 🚀 매칭 DB 업데이트 성공 후, 모든 인원을 인게임 씬으로 이동시킴
-            if (Unity.Netcode.NetworkManager.Singleton.IsServer)
+            if (Unity.Netcode.NetworkManager.Singleton != null &&
+                Unity.Netcode.NetworkManager.Singleton.IsServer)
             {
-                Debug.Log("[Server] 🎬 모든 플레이어 인게임 씬으로 이동 시작...");
-                Unity.Netcode.NetworkManager.Singleton.SceneManager.LoadScene("InGameScene", UnityEngine.SceneManagement.LoadSceneMode.Single);
+                Debug.Log($"[Server] 씬 로드 {sceneLoadDelaySeconds}초 전 대기 중 (클라이언트 접속 대기)...");
+                await System.Threading.Tasks.Task.Delay((int)(sceneLoadDelaySeconds * 1000));
+
+                Debug.Log("[Server] 🎬 인게임 씬 로드 시작...");
+                Unity.Netcode.NetworkManager.Singleton.SceneManager
+                    .LoadScene("InGameScene", UnityEngine.SceneManagement.LoadSceneMode.Single);
             }
         }
         catch (Exception e) { Debug.LogError($"[Server] 매칭 DB 업데이트 실패: {e.Message}"); }

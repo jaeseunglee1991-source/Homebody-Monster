@@ -47,7 +47,14 @@ public class LobbyUIController : MonoBehaviour
     public Slider          timerSlider;        // 60초 진행 바
     public Button          cancelMatchButton;
 
-    private float maxWaitSeconds = 60f;
+    [Header("뒤로가기 확인 팝업 (선택)")]
+    public GameObject exitConfirmPopup;
+    public Button     exitConfirmYesButton;
+    public Button     exitConfirmNoButton;
+    private bool      _exitPopupOpen = false;
+
+    private float maxWaitSeconds  = 60f;
+    private int   maxPlayers      = 8;
     private bool  isPopupActive = false;  // 현재 팝업이 켜져 있는지 추적
     private bool  isPlayerListOpen = false; // 접속자 목록 팝업 토글 상태
 
@@ -60,6 +67,13 @@ public class LobbyUIController : MonoBehaviour
 
     private void Start()
     {
+        // MatchmakingManager 값을 null 체크 후 안전하게 읽기
+        if (MatchmakingManager.Instance != null)
+        {
+            maxWaitSeconds = MatchmakingManager.Instance.maxWaitSeconds;
+            maxPlayers     = MatchmakingManager.Instance.maxPlayers;
+        }
+
         ShowLobbyPanel();
 
         // 1. 네트워크(채팅/접속자) 이벤트 연결
@@ -79,7 +93,6 @@ public class LobbyUIController : MonoBehaviour
         // 2. 매치메이킹 이벤트 연결
         if (MatchmakingManager.Instance != null)
         {
-            maxWaitSeconds = MatchmakingManager.Instance.maxWaitSeconds;
             MatchmakingManager.Instance.OnQueueCountChanged    += HandleQueueCountChanged;
             MatchmakingManager.Instance.OnTimerUpdated         += HandleTimerUpdated;
             MatchmakingManager.Instance.OnStatusMessageChanged += HandleStatusChanged;
@@ -93,10 +106,13 @@ public class LobbyUIController : MonoBehaviour
         // 3. 채팅 입력 필드 설정 (모바일 최적화)
         SetupChatInput();
 
-        // 4. 로비 진입 시 시스템 메시지 표시
+        // 4. 뒤로가기 확인 팝업 설정
+        SetupExitConfirmPopup();
+
+        // 5. 로비 진입 시 시스템 메시지 표시
         UpdateChatUI("[시스템]: 로비에 입장했습니다. 즐거운 게임 되세요!");
 
-        // 5. 유저 프로필 정보 로드 및 UI 반영
+        // 6. 유저 프로필 정보 로드 및 UI 반영
         RefreshUserProfileUI();
     }
 
@@ -141,10 +157,74 @@ public class LobbyUIController : MonoBehaviour
 
     private void Update()
     {
-        // 📱 실전 호환성: 안드로이드 뒤로가기(Escape) 버튼 지원
-        // (New Input System 환경에서는 Keyboard.current 등을 쓰거나
-        //  UI 캔버스에서 Navigation을 활용하는 것이 좋지만,
-        //  현재는 에러 방지를 위해 이 부분을 일단 비워두거나 이벤트를 통해 처리합니다.)
+        // Android 뒤로가기 버튼 (Escape 키와 동일)
+        if (Input.GetKeyDown(KeyCode.Escape))
+        {
+            HandleBackButton();
+        }
+    }
+
+    private void HandleBackButton()
+    {
+        // 뒤로가기 확인 팝업이 열려 있으면 닫기
+        if (_exitPopupOpen)
+        {
+            CloseExitConfirmPopup();
+            return;
+        }
+
+        // 접속자 목록 팝업이 열려 있으면 닫기
+        if (isPlayerListOpen)
+        {
+            TogglePlayerListPopup();
+            return;
+        }
+
+        // 매칭 중이면 매칭 취소
+        if (isPopupActive)
+        {
+            OnClickCancelMatch();
+            return;
+        }
+
+        // 로비 상태 → 앱 종료 확인 팝업 표시
+        OpenExitConfirmPopup();
+    }
+
+    private void SetupExitConfirmPopup()
+    {
+        if (exitConfirmPopup != null) exitConfirmPopup.SetActive(false);
+        if (exitConfirmYesButton != null) exitConfirmYesButton.onClick.AddListener(QuitApp);
+        if (exitConfirmNoButton  != null) exitConfirmNoButton.onClick.AddListener(CloseExitConfirmPopup);
+    }
+
+    private void OpenExitConfirmPopup()
+    {
+        if (exitConfirmPopup != null)
+        {
+            _exitPopupOpen = true;
+            exitConfirmPopup.SetActive(true);
+        }
+        else
+        {
+            QuitApp();
+        }
+    }
+
+    private void CloseExitConfirmPopup()
+    {
+        _exitPopupOpen = false;
+        if (exitConfirmPopup != null) exitConfirmPopup.SetActive(false);
+    }
+
+    private void QuitApp()
+    {
+        Debug.Log("[LobbyUI] 앱 종료");
+#if UNITY_EDITOR
+        UnityEditor.EditorApplication.isPlaying = false;
+#else
+        Application.Quit();
+#endif
     }
 
     private void OnDestroy()
@@ -362,7 +442,7 @@ public class LobbyUIController : MonoBehaviour
         if (timerText      != null) timerText.text = $"{(int)maxWaitSeconds:00}초";
         if (timerSlider    != null) timerSlider.value = maxWaitSeconds;
         if (statusText     != null) statusText.text = "";
-        if (queueCountText != null) queueCountText.text = "0 / 8명";
+        if (queueCountText != null) queueCountText.text = $"0 / {maxPlayers}명";
     }
 
     private void ShowMatchmakingPanel()

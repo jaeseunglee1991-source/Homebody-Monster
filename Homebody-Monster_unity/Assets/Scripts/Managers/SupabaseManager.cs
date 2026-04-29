@@ -74,7 +74,22 @@ public class SupabaseManager : MonoBehaviour
 
     private async Task InitSupabase()
     {
-        if (string.IsNullOrEmpty(supabaseUrl) || string.IsNullOrEmpty(supabaseAnonKey))
+        string url = supabaseUrl;
+        string key = supabaseAnonKey;
+
+        var config = Resources.Load<SupabaseConfig>("SupabaseConfig");
+        if (config != null)
+        {
+            url = config.SupabaseUrl;
+            key = config.SupabaseAnonKey;
+            Debug.Log("[Supabase] SupabaseConfig.asset 로드 완료");
+        }
+        else
+        {
+            Debug.LogWarning("[Supabase] SupabaseConfig.asset 없음 — Inspector 값 사용 (출시 빌드에서는 권장하지 않음)");
+        }
+
+        if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(key))
         {
             Debug.LogError("❌ SupabaseManager: URL 또는 Key가 설정되지 않았습니다.");
             return;
@@ -88,7 +103,7 @@ public class SupabaseManager : MonoBehaviour
                 AutoRefreshToken    = true,
             };
 
-            Client = new Client(supabaseUrl, supabaseAnonKey, options);
+            Client = new Client(url, key, options);
             await Client.InitializeAsync();
             IsInitialized = true;
             Debug.Log("✅ Supabase 초기화 완료");
