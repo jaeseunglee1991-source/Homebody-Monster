@@ -47,6 +47,15 @@ public class LobbyUIController : MonoBehaviour
     public Slider          timerSlider;        // 60초 진행 바
     public Button          cancelMatchButton;
 
+    [Header("MatchmakingUX (선택 — 매칭 카운트다운 UX 컴포넌트)")]
+    /// <summary>
+    /// 씬에 MatchmakingUX 컴포넌트가 있을 경우 연결하세요.
+    /// OnMatchFound(ip, port) / OnMatchFailed(reason) 이벤트를 수신하여
+    /// 카운트다운 후 ConnectToGameServer를 호출합니다.
+    /// null이면 MatchmakingManager가 직접 연결합니다.
+    /// </summary>
+    public MatchmakingUX matchmakingUX;
+
     [Header("뒤로가기 확인 팝업 (선택)")]
     public GameObject exitConfirmPopup;
     public Button     exitConfirmYesButton;
@@ -75,12 +84,16 @@ public class LobbyUIController : MonoBehaviour
         }
 
         ShowLobbyPanel();
+        AudioManager.Instance?.PlayLobbyBGM();
 
         // 1. 네트워크(채팅/접속자) 이벤트 연결
         if (AppNetworkManager.Instance != null)
         {
             AppNetworkManager.Instance.OnPlayerPresenceUpdated += UpdatePlayerListDetail;
-            AppNetworkManager.Instance.OnChatReceived        += UpdateChatUI;
+            AppNetworkManager.Instance.OnChatReceived          += UpdateChatUI;
+            AppNetworkManager.Instance.OnClientDisconnected    += HandleServerDisconnected;
+            // 채팅 채널 구독 완료 이벤트 — 완료 전까지 전송 버튼 비활성화
+            AppNetworkManager.Instance.OnLobbyChatReady        += HandleLobbyChatReady;
             AppNetworkManager.Instance.ConnectToLobby();
         }
 
@@ -98,6 +111,15 @@ public class LobbyUIController : MonoBehaviour
             MatchmakingManager.Instance.OnStatusMessageChanged += HandleStatusChanged;
             MatchmakingManager.Instance.OnMatchFound           += HandleMatchFound;
             MatchmakingManager.Instance.OnMatchmakingFailed    += HandleMatchmakingFailed;
+
+            // [Fix #8] MatchmakingUX — ip/port 페이로드 이벤트 연결
+            // OnMatchFound(string, ushort): 매칭 성공 시 카운트다운 + 씬 전환 처리
+            // OnMatchFailed(string):        매칭 실패/취소 시 UX 정리
+            if (matchmakingUX != null)
+            {
+                MatchmakingManager.Instance.OnMatchFound  += matchmakingUX.OnMatchFound;
+                MatchmakingManager.Instance.OnMatchFailed += matchmakingUX.OnMatchFailed;
+            }
         }
 
         if (timerSlider != null)
@@ -112,7 +134,10 @@ public class LobbyUIController : MonoBehaviour
         // 5. 로비 진입 시 시스템 메시지 표시
         UpdateChatUI("[시스템]: 로비에 입장했습니다. 즐거운 게임 되세요!");
 
-        // 6. 유저 프로필 정보 로드 및 UI 반영
+        // 6. 일일 출석 보상 체크 (오늘 첫 접속이면 팝업 자동 표시)
+        DailyRewardSystem.Instance?.TryClaimOnLobbyEnter();
+
+        // 7. 유저 프로필 정보 로드 및 UI 반영
         RefreshUserProfileUI();
     }
 
@@ -158,7 +183,7 @@ public class LobbyUIController : MonoBehaviour
     private void Update()
     {
         // Android 뒤로가기 버튼 (Escape 키와 동일)
-        if (Input.GetKeyDown(KeyCode.Escape))
+        if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
         {
             HandleBackButton();
         }
@@ -233,7 +258,9 @@ public class LobbyUIController : MonoBehaviour
         if (AppNetworkManager.Instance != null)
         {
             AppNetworkManager.Instance.OnPlayerPresenceUpdated -= UpdatePlayerListDetail;
-            AppNetworkManager.Instance.OnChatReceived        -= UpdateChatUI;
+            AppNetworkManager.Instance.OnChatReceived          -= UpdateChatUI;
+            AppNetworkManager.Instance.OnClientDisconnected    -= HandleServerDisconnected;
+            AppNetworkManager.Instance.OnLobbyChatReady        -= HandleLobbyChatReady;
 
             // Supabase Realtime 채팅 채널 구독 해제 (로비 전용이므로 씬 이탈 시 정리)
             AppNetworkManager.Instance.DisconnectLobbyChat();
@@ -246,6 +273,12 @@ public class LobbyUIController : MonoBehaviour
             MatchmakingManager.Instance.OnStatusMessageChanged -= HandleStatusChanged;
             MatchmakingManager.Instance.OnMatchFound           -= HandleMatchFound;
             MatchmakingManager.Instance.OnMatchmakingFailed    -= HandleMatchmakingFailed;
+
+            if (matchmakingUX != null)
+            {
+                MatchmakingManager.Instance.OnMatchFound  -= matchmakingUX.OnMatchFound;
+                MatchmakingManager.Instance.OnMatchFailed -= matchmakingUX.OnMatchFailed;
+            }
         }
     }
 
@@ -266,9 +299,12 @@ public class LobbyUIController : MonoBehaviour
         if (chatInputField.placeholder is TextMeshProUGUI placeholderText)
             placeholderText.text = "메시지를 입력하세요...";
 
-        // 전송 버튼 연결
+        // 전송 버튼 연결 — 채널 구독 완료 전까지 비활성화
         if (sendChatButton != null)
+        {
+            sendChatButton.interactable = false;
             sendChatButton.onClick.AddListener(OnClickSendChat);
+        }
 
         // ⌨️ 엔터키 전송 지원 (New Input System 에러 방지 및 UX 향상)
         chatInputField.onSubmit.AddListener((val) =>
@@ -277,6 +313,18 @@ public class LobbyUIController : MonoBehaviour
             // 전송 후 바로 다시 입력할 수 있게 포커스 유지
             chatInputField.ActivateInputField();
         });
+    }
+
+    /// <summary>
+    /// Supabase 채팅 채널 구독 완료 시 호출됩니다 (AppNetworkManager.OnLobbyChatReady).
+    /// 전송 버튼을 활성화하고 시스템 메시지를 표시합니다.
+    /// </summary>
+    private void HandleLobbyChatReady()
+    {
+        if (sendChatButton != null)
+            sendChatButton.interactable = true;
+
+        UpdateChatUI("[시스템]: 채팅 연결되었습니다.");
     }
 
     // ── 버튼 클릭 이벤트 ──────────────────────────────────────
@@ -342,7 +390,9 @@ public class LobbyUIController : MonoBehaviour
             statusText.text = message;
     }
 
-    private void HandleMatchFound()
+    // [Fix #1] OnMatchFound 시그니처 변경(Action<string,ushort>)에 맞춰 파라미터 추가.
+    // ip/port는 MatchmakingUX가 처리하므로 여기서는 UI 상태만 갱신.
+    private void HandleMatchFound(string ip, ushort port)
     {
         if (statusText != null)
             statusText.text = "매칭 완료! 게임 입장 중...";
@@ -369,6 +419,22 @@ public class LobbyUIController : MonoBehaviour
     {
         if (onlineCountText != null)
             onlineCountText.text = $"현재 접속자: {count}명";
+    }
+
+    // [FIX] OnClientDisconnected 핸들러 추가.
+    // 인게임 서버와 연결이 끊어졌을 때 호출됩니다.
+    // 정상 게임 종료(ResultController가 NGO 정리) 시에는 호출되지 않고,
+    // 비정상 연결 해제(서버 다운, 네트워크 끊김)일 때만 호출됩니다.
+    // 인게임 중 재접속 시도는 ReconnectManager가 먼저 처리하며,
+    // 재접속 실패 후 로비로 복귀했을 때 이 핸들러가 안내 메시지를 표시합니다.
+    private void HandleServerDisconnected(string reason)
+    {
+        Debug.LogWarning($"[LobbyUIController] 서버 연결 해제: {reason}");
+        // 채팅으로 안내 (이미 로비 씬에 있는 경우)
+        UpdateChatUI($"[시스템]: 서버 연결이 끊어졌습니다. ({reason})");
+        // 매칭 탐색 중이었다면 큐 정리
+        if (MatchmakingManager.Instance != null && MatchmakingManager.Instance.IsSearching)
+            MatchmakingManager.Instance.CancelSearch();
     }
 
     /// <summary>

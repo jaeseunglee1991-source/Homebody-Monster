@@ -44,7 +44,8 @@ public class SettingsManager : MonoBehaviour
         IsLowResolution = PlayerPrefs.GetInt(KEY_RES, 0) == 1;
 
         ApplyPerformanceSettings();
-        // 오디오 매니저가 생기면 ApplyAudioSettings() 호출 추가
+        AudioManager.Instance?.SetBgmVolume(BgmVolume);
+        AudioManager.Instance?.SetSfxVolume(SfxVolume);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -94,8 +95,7 @@ public class SettingsManager : MonoBehaviour
     {
         BgmVolume = Mathf.Clamp01(volume);
         PlayerPrefs.SetFloat(KEY_BGM, BgmVolume);
-        // 오디오 매니저 연동 시 여기에서 볼륨 적용:
-        // AudioManager.Instance?.SetBgmVolume(BgmVolume);
+        AudioManager.Instance?.SetBgmVolume(BgmVolume);
     }
 
     /// <summary>SFX 볼륨을 설정합니다 (0.0 ~ 1.0).</summary>
@@ -103,7 +103,7 @@ public class SettingsManager : MonoBehaviour
     {
         SfxVolume = Mathf.Clamp01(volume);
         PlayerPrefs.SetFloat(KEY_SFX, SfxVolume);
-        // AudioManager.Instance?.SetSfxVolume(SfxVolume);
+        AudioManager.Instance?.SetSfxVolume(SfxVolume);
     }
 
     /// <summary>목표 프레임을 설정합니다. 권장값: 30, 60, 90.</summary>

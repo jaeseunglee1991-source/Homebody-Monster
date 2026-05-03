@@ -2,9 +2,14 @@ using UnityEngine;
 
 public static class StatCalculator
 {
-    public static float GetGradeMultiplier(GradeTier grade) => 1.0f + (int)grade * 0.111f;
+    private static GameBalanceConfig Cfg => GameBalanceConfig.Get();
 
-    // 고정값(+) 대신 배율(×)로 직업별 스탯 보정 — 등급이 높아져도 비율이 일정하게 유지됨
+    public static float GetGradeMultiplier(GradeTier grade)
+    {
+        float step = Cfg != null ? Cfg.GradeMultiplierStep : 0.111f;
+        return 1.0f + (int)grade * step;
+    }
+
     private struct JobStat { public float HpMult, AtkMult, Speed; }
 
     private static readonly System.Collections.Generic.Dictionary<JobType, JobStat> JobBaseStats
@@ -24,18 +29,24 @@ public static class StatCalculator
 
     public static CharacterData GenerateCharacter(string name, JobType? forceJob = null)
     {
+        var cfg  = Cfg;
         var data = new CharacterData();
+
         data.playerName = name;
         data.job      = forceJob ?? (JobType)Random.Range(0, 10);
         data.affinity = (AffinityType)Random.Range(0, System.Enum.GetValues(typeof(AffinityType)).Length);
         data.grade    = (GradeTier)Random.Range(0, System.Enum.GetValues(typeof(GradeTier)).Length);
 
-        float rawHp  = Random.Range(20f, 50f);
-        float rawAtk = Random.Range(2.0f, 5.0f);
-        float mult   = GetGradeMultiplier(data.grade);
-        var stat = JobBaseStats[data.job];
+        float hpMin  = cfg != null ? cfg.BaseHpMin  : 20f;
+        float hpMax  = cfg != null ? cfg.BaseHpMax  : 50f;
+        float atkMin = cfg != null ? cfg.BaseAtkMin : 2f;
+        float atkMax = cfg != null ? cfg.BaseAtkMax : 5f;
 
-        // 곱산 적용: rawStat × 등급배율 × 직업배율
+        float rawHp  = Random.Range(hpMin,  hpMax);
+        float rawAtk = Random.Range(atkMin, atkMax);
+        float mult   = GetGradeMultiplier(data.grade);
+        var   stat   = JobBaseStats[data.job];
+
         data.maxHp     = Round1(rawHp  * mult * stat.HpMult);
         data.currentHp = data.maxHp;
         data.baseAtk   = Round1(rawAtk * mult * stat.AtkMult);
@@ -45,7 +56,6 @@ public static class StatCalculator
         return data;
     }
 
-    // 게임 시작 시: 패시브 0~4개 + 직업 액티브 1~4개 랜덤 배정
     public static void RollSkills(CharacterData data)
     {
         data.passiveSkills.Clear();

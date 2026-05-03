@@ -13,6 +13,7 @@ using System.Collections.Generic;
 ///  - ShowReviveUI()에서 현재 매치 상태에 맞는 안내 문구 표시
 ///  - ReviveDeniedClientRpc 수신 시 HideReviveUI() 호출 (PlayerNetworkSync에서 직접 처리)
 ///  - GetSkillShortName 전체 40종 포함 유지
+///  - 킬 피드(Kill Feed) 구현: 최대 5줄, 항목별 4초 후 자동 제거
 /// </summary>
 public class InGameHUD : MonoBehaviour
 {
@@ -37,9 +38,33 @@ public class InGameHUD : MonoBehaviour
     public GameObject endBannerPanel;
     public TextMeshProUGUI       endBannerText;
 
+    [Header("킬 피드")]
+    /// <summary>
+    /// 킬 로그를 표시할 TextMeshProUGUI.
+    /// Inspector에서 화면 우측 상단 영역에 배치하세요.
+    /// Overflow: Overflow, Alignment: Right, Rich Text: ON 권장.
+    /// </summary>
+    public TextMeshProUGUI killFeedText;
+
+    // ── 킬 피드 내부 상태 ─────────────────────────────────────
+    private const int   KillFeedMaxLines    = 5;
+    private const float KillFeedDisplaySecs = 4f;
+
+    private readonly Queue<(string msg, float expireAt)> _killFeedQueue
+        = new Queue<(string, float)>();
+
+    private Coroutine _killFeedRoutine;
+
+    [Header("조작 UI 루트 (스펙테이터 모드에서 숨김)")]
+    /// <summary>
+    /// 스킬 버튼, 공격 버튼 등 인게임 조작 UI를 묶은 루트 GameObject.
+    /// Inspector에서 연결하세요. SpectatorManager가 사망 시 비활성화합니다.
+    /// </summary>
+    public GameObject controlsRoot;
+
     [Header("부활 UI")]
     public GameObject      revivePanel;
-    public TextMeshProUGUI            reviveTimerText;
+    public TextMeshProUGUI reviveTimerText;
     /// <summary>
     /// 부활 가능 여부 및 제한 사유를 표시하는 텍스트.
     /// Inspector에서 RevivePanel 하위에 배치하세요.
@@ -63,12 +88,23 @@ public class InGameHUD : MonoBehaviour
 
         if (endBannerPanel != null) endBannerPanel.SetActive(false);
         if (revivePanel    != null) revivePanel.SetActive(false);
+        if (killFeedText   != null) killFeedText.text = "";
     }
 
     public void InitPlayerUI(PlayerController player)
     {
         localPlayer = player;
         SetupSkillButtons(player);
+    }
+
+    /// <summary>
+    /// 인게임 조작 UI(스킬 버튼 등)의 표시 여부를 전환합니다.
+    /// SpectatorManager에서 사망 후 관전 진입 시 false로 호출합니다.
+    /// </summary>
+    public void SetControlsVisible(bool visible)
+    {
+        if (controlsRoot != null)
+            controlsRoot.SetActive(visible);
     }
 
     private void Update() => UpdateCooldownUI();
@@ -114,8 +150,11 @@ public class InGameHUD : MonoBehaviour
     {
         if (localPlayer == null || cooldownTimers == null ||
             slot >= cooldownTimers.Length || cooldownTimers[slot] > 0f) return;
-        localPlayer.UseSkill(slot);
-        cooldownTimers[slot] = cooldownMaxes[slot];
+
+        // [FIX] UseSkill 반환값(bool)으로 성공 여부 확인 후 쿨다운 시작.
+        // IsSilenced/IsDead로 RPC가 차단돼도 쿨다운 UI가 무조건 시작되는 버그 수정.
+        if (localPlayer.UseSkill(slot))
+            cooldownTimers[slot] = cooldownMaxes[slot];
     }
 
     private void UpdateCooldownUI()
@@ -158,11 +197,87 @@ public class InGameHUD : MonoBehaviour
     {
         if (endBannerPanel != null) endBannerPanel.SetActive(true);
         if (endBannerText  != null) endBannerText.text = message;
+        AudioManager.Instance?.PlayResultBGM();
     }
 
     public void SetGameStarted(int totalPlayers)
     {
         UpdateSurvivorCount(totalPlayers, totalPlayers);
+        AudioManager.Instance?.PlayInGameBGM();
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  킬 피드
+    // ════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// 킬 이벤트 발생 시 호출합니다.
+    /// PlayerNetworkSync(또는 InGameManager)의 킬 처리 완료 콜백에서 호출하세요.
+    /// 로컬 플레이어가 공격자일 경우 닉네임을 노란색으로 강조합니다.
+    /// </summary>
+    public void ShowKillFeed(string attackerName, string victimName)
+    {
+        if (killFeedText == null) return;
+
+        string localNickname = GameManager.Instance?.currentPlayerNickname ?? "";
+
+        string attackerFormatted = attackerName == localNickname
+            ? $"<color=#f1c40f>{attackerName}</color>"
+            : attackerName;
+
+        string entry = $"⚔️ {attackerFormatted} → {victimName}";
+
+        _killFeedQueue.Enqueue((entry, Time.time + KillFeedDisplaySecs));
+        AudioManager.Instance?.PlayKillFeed();
+
+        while (_killFeedQueue.Count > KillFeedMaxLines)
+            _killFeedQueue.Dequeue();
+
+        RefreshKillFeedText();
+
+        if (_killFeedRoutine == null)
+            _killFeedRoutine = StartCoroutine(KillFeedExpiryRoutine());
+    }
+
+    private void RefreshKillFeedText()
+    {
+        if (killFeedText == null) return;
+
+        if (_killFeedQueue.Count == 0)
+        {
+            killFeedText.text = "";
+            return;
+        }
+
+        var sb = new System.Text.StringBuilder();
+        foreach (var (msg, _) in _killFeedQueue)
+        {
+            if (sb.Length > 0) sb.Append('\n');
+            sb.Append(msg);
+        }
+        killFeedText.text = sb.ToString();
+    }
+
+    private IEnumerator KillFeedExpiryRoutine()
+    {
+        var halfSec = new WaitForSeconds(0.5f);
+
+        while (_killFeedQueue.Count > 0)
+        {
+            yield return halfSec;
+
+            bool changed = false;
+            while (_killFeedQueue.Count > 0 && Time.time >= _killFeedQueue.Peek().expireAt)
+            {
+                _killFeedQueue.Dequeue();
+                changed = true;
+            }
+
+            if (changed)
+                RefreshKillFeedText();
+        }
+
+        _killFeedRoutine = null;
     }
 
     // ════════════════════════════════════════════════════════════

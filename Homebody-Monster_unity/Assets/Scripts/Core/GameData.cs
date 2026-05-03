@@ -108,6 +108,7 @@ public class CharacterData
     [System.NonSerialized] public float shieldHp              = 0f;
     [System.NonSerialized] public float deathMarkAccumulated  = 0f;
     [System.NonSerialized] public bool  deathMarkActive       = false;
+    [System.NonSerialized] public ulong deathMarkCasterId     = ulong.MaxValue;
     [System.NonSerialized] public bool  stealthFirstAttack    = false;
 
     public bool HasPassive(PassiveSkillType p) => passiveSkills.Contains(p);

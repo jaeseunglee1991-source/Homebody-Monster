@@ -24,6 +24,10 @@ public class NetworkSpawnManager : NetworkBehaviour
     [Tooltip("플레이어 스폰 위치 배열 (maxPlayers만큼 배치 권장)")]
     public Transform[] spawnPoints;
 
+    [Header("핑 모니터")]
+    [Tooltip("NetworkObject + NetworkPingMonitor 컴포넌트가 붙은 프리팹. Assets/Prefabs/Network/PingMonitor_Host.prefab")]
+    public GameObject pingMonitorPrefab;
+
     [Header("게임 시작 조건")]
     [Tooltip("예상 접속 인원. MatchmakingManager.maxPlayers와 동일하게 설정.")]
     public int expectedPlayerCount = 2;
@@ -33,8 +37,8 @@ public class NetworkSpawnManager : NetworkBehaviour
 
     // ── 서버 전용 상태 ─────────────────────────────────────────
     private readonly Dictionary<ulong, PlayerNetworkSync> _players = new();
-    private int   _usedSpawnPoints = 0;
-    private bool  _gameStarted     = false;
+    private readonly List<int> _shuffledSpawnIndices = new();
+    private bool  _gameStarted = false;
 
     // ════════════════════════════════════════════════════════════
     //  초기화
@@ -52,6 +56,25 @@ public class NetworkSpawnManager : NetworkBehaviour
 
         NetworkManager.Singleton.OnClientConnectedCallback  += HandleClientConnected;
         NetworkManager.Singleton.OnClientDisconnectCallback += HandleClientDisconnected;
+
+        // [C] PingAdaptiveCombat 배치 누락 조기 감지
+        if (PingAdaptiveCombat.Instance == null)
+            Debug.LogWarning("[NetworkSpawnManager] ⚠ PingAdaptiveCombat이 씬에 없습니다. " +
+                             "InGameScene Hierarchy에 GameObject를 추가하고 컴포넌트를 붙이세요.");
+
+        // [D] NetworkPingMonitor 프리팹 스폰
+        if (pingMonitorPrefab != null)
+        {
+            var pingObj = Instantiate(pingMonitorPrefab);
+            pingObj.GetComponent<Unity.Netcode.NetworkObject>()
+                   .Spawn(destroyWithScene: true);
+            Debug.Log("[NetworkSpawnManager] ✅ NetworkPingMonitor 스폰 완료");
+        }
+        else
+        {
+            Debug.LogWarning("[NetworkSpawnManager] ⚠ pingMonitorPrefab이 할당되지 않았습니다. " +
+                             "Inspector에서 PingMonitor_Host 프리팹을 연결하세요.");
+        }
 
         Debug.Log($"[NetworkSpawnManager] ☁️ 서버 준비. {expectedPlayerCount}명 대기 시작.");
         StartCoroutine(WaitForPlayersRoutine());
@@ -95,6 +118,9 @@ public class NetworkSpawnManager : NetworkBehaviour
         sync.NetworkIsDead.Value = true;
         InGameManager.Instance?.OnPlayerDied(sync.GetComponent<PlayerController>());
         Debug.LogWarning($"[NetworkSpawnManager] 클라이언트 {clientId} 접속 해제 → 사망 처리");
+
+        // [B] 핑 보정 시스템에서 이탈 클라이언트 데이터 정리
+        PingAdaptiveCombat.Instance?.RemovePlayer(clientId);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -144,10 +170,23 @@ public class NetworkSpawnManager : NetworkBehaviour
     {
         if (spawnPoints == null || spawnPoints.Length == 0) return Vector3.zero;
 
-        // 순환 배정 (8명까지 서로 다른 위치에 배치)
-        var point = spawnPoints[_usedSpawnPoints % spawnPoints.Length];
-        _usedSpawnPoints++;
-        return point != null ? point.position : Vector3.zero;
+        // 셔플된 인덱스가 소진되면 다시 채워서 셔플 (Fisher-Yates)
+        if (_shuffledSpawnIndices.Count == 0)
+        {
+            for (int i = 0; i < spawnPoints.Length; i++)
+                _shuffledSpawnIndices.Add(i);
+
+            for (int i = _shuffledSpawnIndices.Count - 1; i > 0; i--)
+            {
+                int j = Random.Range(0, i + 1);
+                (_shuffledSpawnIndices[i], _shuffledSpawnIndices[j])
+                    = (_shuffledSpawnIndices[j], _shuffledSpawnIndices[i]);
+            }
+        }
+
+        int idx = _shuffledSpawnIndices[0];
+        _shuffledSpawnIndices.RemoveAt(0);
+        return spawnPoints[idx] != null ? spawnPoints[idx].position : Vector3.zero;
     }
 
     // ════════════════════════════════════════════════════════════

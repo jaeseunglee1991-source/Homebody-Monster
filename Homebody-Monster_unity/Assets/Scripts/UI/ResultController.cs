@@ -1,8 +1,14 @@
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.InputSystem;
 using System.Collections;
 using System.Collections.Generic;
+
+#if GOOGLE_MOBILE_ADS
+using GoogleMobileAds.Api;
+using GoogleMobileAds.Common;
+#endif
 
 /// <summary>
 /// 결과 씬 UI를 관리합니다.
@@ -37,10 +43,27 @@ public class ResultController : MonoBehaviour
     private readonly Queue<string> chatLines = new Queue<string>();
     private const int MaxChatLogLines = 50;
 
+    // ── AdMob 광고 단위 ID ────────────────────────────────────
+    // [수정 필요] 실제 AdMob 콘솔에서 발급받은 광고 단위 ID로 교체하세요.
+    // 아래는 Google 공식 테스트 ID입니다 (출시 전까지 유지).
+#if UNITY_ANDROID
+    private const string RewardedAdUnitId = "ca-app-pub-3940256099942544/5224354917";
+#elif UNITY_IOS
+    private const string RewardedAdUnitId = "ca-app-pub-3940256099942544/1712485313";
+#else
+    private const string RewardedAdUnitId = "unused";
+#endif
+
     // ── 보상 상태 ────────────────────────────────────────────
-    private int _earnedPizza = 0;
+    private int  _earnedPizza    = 0;
     private bool _adBonusClaimed = false;
-    private bool _rewardClaimed = false;
+    private bool _rewardClaimed  = false;
+
+#if GOOGLE_MOBILE_ADS
+    // ── AdMob 보상형 광고 ─────────────────────────────────────
+    private RewardedAd _rewardedAd;
+    private bool _isAdLoading = false;
+#endif
 
     private void Awake()
     {
@@ -55,6 +78,11 @@ public class ResultController : MonoBehaviour
     {
         // ── NGO 연결 정리 (인게임 → 결과 씬 전환 시) ──────────
         CleanupNetcodeConnection();
+
+        // ── AdMob 초기화 ──────────────────────────────────────
+#if GOOGLE_MOBILE_ADS
+        InitializeAdMob();
+#endif
 
         // ── 채팅 이벤트 연결 + 로비 채팅 채널 접속 ──────────────
         if (AppNetworkManager.Instance != null)
@@ -81,8 +109,8 @@ public class ResultController : MonoBehaviour
 
     private void Update()
     {
-        // 엔터 키로 채팅 전송 지원
-        if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter))
+        // 엔터 키로 채팅 전송 지원 (New Input System)
+        if (Keyboard.current != null && Keyboard.current.enterKey.wasPressedThisFrame)
         {
             if (chatInputField != null && chatInputField.isFocused)
             {
@@ -103,6 +131,11 @@ public class ResultController : MonoBehaviour
             // [Fix #4] 씬 전환 시 채팅 채널 구독 해제 — 리소스 누수 및 이벤트 중복 방지
             AppNetworkManager.Instance.DisconnectLobbyChat();
         }
+
+        // 광고 객체 메모리 해제
+#if GOOGLE_MOBILE_ADS
+        DestroyRewardedAd();
+#endif
     }
 
     // ════════════════════════════════════════════════════════════
@@ -167,6 +200,11 @@ public class ResultController : MonoBehaviour
 
     /// <summary>
     /// Supabase 프로필에서 승/패 전적을 로드하여 UI에 표시합니다.
+    ///
+    /// [Fix] GameManager.MatchResultSaveTask 완료 대기 추가.
+    /// save_match_result RPC가 완료되기 전에 GetOrCreateProfile을 호출하면
+    /// 이번 매치 결과가 반영되지 않은 이전 전적이 표시되는 버그 수정.
+    /// 최대 5초 대기 후 타임아웃 시 그 시점의 프로필로 표시.
     /// </summary>
     private IEnumerator LoadAndDisplayRecord()
     {
@@ -174,6 +212,22 @@ public class ResultController : MonoBehaviour
             GameManager.Instance == null || string.IsNullOrEmpty(GameManager.Instance.currentPlayerId))
         {
             yield break;
+        }
+
+        // save_match_result 완료 대기 (최대 5초 타임아웃)
+        var saveTask = GameManager.Instance.MatchResultSaveTask;
+        if (saveTask != null && !saveTask.IsCompleted)
+        {
+            float waited = 0f;
+            const float timeout = 5f;
+            while (!saveTask.IsCompleted && waited < timeout)
+            {
+                yield return null;
+                waited += Time.deltaTime;
+            }
+
+            if (!saveTask.IsCompleted)
+                Debug.LogWarning("[ResultController] 결과 저장 대기 타임아웃 — 이전 전적이 표시될 수 있습니다.");
         }
 
         var task = SupabaseManager.Instance.GetOrCreateProfile(GameManager.Instance.currentPlayerId);
@@ -228,6 +282,67 @@ public class ResultController : MonoBehaviour
     }
 
     // ════════════════════════════════════════════════════════════
+    //  AdMob 초기화 및 보상형 광고
+    // ════════════════════════════════════════════════════════════
+
+#if GOOGLE_MOBILE_ADS
+    private void InitializeAdMob()
+    {
+        MobileAds.Initialize(status =>
+        {
+            MobileAdsEventExecutor.ExecuteInUpdate(() =>
+            {
+                Debug.Log("[AdMob] 초기화 완료");
+                LoadRewardedAd();
+            });
+        });
+    }
+
+    private void LoadRewardedAd()
+    {
+        if (_isAdLoading) return;
+        _isAdLoading = true;
+        DestroyRewardedAd();
+        RewardedAd.Load(RewardedAdUnitId, new AdRequest(), OnRewardedAdLoaded);
+    }
+
+    private void OnRewardedAdLoaded(RewardedAd ad, LoadAdError error)
+    {
+        _isAdLoading = false;
+        if (error != null || ad == null)
+        {
+            Debug.LogWarning($"[AdMob] 광고 로드 실패: {error?.GetMessage()}");
+            return;
+        }
+        Debug.Log("[AdMob] 보상형 광고 로드 완료");
+        _rewardedAd = ad;
+        RegisterRewardedAdEvents(_rewardedAd);
+    }
+
+    private void RegisterRewardedAdEvents(RewardedAd ad)
+    {
+        ad.OnAdImpressionRecorded      += () => Debug.Log("[AdMob] 광고 노출 기록");
+        ad.OnAdClicked                 += () => Debug.Log("[AdMob] 광고 클릭");
+        ad.OnAdFullScreenContentOpened += () => Debug.Log("[AdMob] 광고 전체 화면 오픈");
+        ad.OnAdFullScreenContentClosed += () =>
+        {
+            Debug.Log("[AdMob] 광고 닫힘 — 다음 광고 사전 로드");
+            LoadRewardedAd();
+        };
+        ad.OnAdFullScreenContentFailed += adError =>
+        {
+            Debug.LogWarning($"[AdMob] 광고 표시 실패: {adError.GetMessage()}");
+            SetAdButtonInteractable(true);
+        };
+    }
+
+    private void DestroyRewardedAd()
+    {
+        if (_rewardedAd != null) { _rewardedAd.Destroy(); _rewardedAd = null; }
+    }
+#endif
+
+    // ════════════════════════════════════════════════════════════
     //  광고 2배 보너스
     // ════════════════════════════════════════════════════════════
 
@@ -235,13 +350,60 @@ public class ResultController : MonoBehaviour
     {
         if (_adBonusClaimed || _earnedPizza <= 0) return;
 
-        // TODO: 실제 광고 SDK 연동 (AdMob 등)
-        // 광고 시청 완료 콜백에서 아래를 호출
+#if GOOGLE_MOBILE_ADS
+        if (_rewardedAd != null && _rewardedAd.CanShowAd())
+        {
+            SetAdButtonInteractable(false);
+            _rewardedAd.Show(reward =>
+            {
+                MobileAdsEventExecutor.ExecuteInUpdate(() =>
+                {
+                    Debug.Log($"[AdMob] 보상 지급: {reward.Type} x{reward.Amount}");
+                    StartCoroutine(ClaimAdBonusReward());
+                });
+            });
+        }
+        else
+        {
+            Debug.LogWarning("[AdMob] 광고 아직 준비되지 않음 — 재로드 중");
+            if (adBonusButtonText != null)
+                adBonusButtonText.text = "📡 광고 준비 중... 잠시 후 다시 눌러주세요";
+            SetAdButtonInteractable(false);
+            LoadRewardedAd();
+            StartCoroutine(ReenableAdButtonAfterDelay(3f));
+        }
+#else
+        // AdMob SDK 미설치 시 광고 없이 바로 보상 지급 (개발/테스트 환경)
         StartCoroutine(ClaimAdBonusReward());
+#endif
     }
+
+    private void SetAdButtonInteractable(bool interactable)
+    {
+        if (adBonusButton != null) adBonusButton.interactable = interactable;
+    }
+
+#if GOOGLE_MOBILE_ADS
+    private IEnumerator ReenableAdButtonAfterDelay(float delay)
+    {
+        yield return new WaitForSeconds(delay);
+        SetAdButtonInteractable(true);
+        if (adBonusButtonText != null)
+            adBonusButtonText.text = $"📺 광고 시청으로 {_earnedPizza}🍕 추가 획득!";
+    }
+#endif
 
     private IEnumerator ClaimAdBonusReward()
     {
+        // [Fix] _adBonusClaimed를 await 이전에 즉시 true로 설정.
+        // 기존 코드는 GrantMatchRewards() 완료 후에 설정하므로,
+        // 광고 콜백(MobileAdsEventExecutor.ExecuteInUpdate)과 버튼 탭 사이의
+        // 수십~수백ms 사이에 OnClickAdBonus()가 재진입하면 _adBonusClaimed가
+        // 아직 false여서 코루틴이 두 번 시작됨 → grant_match_rewards 중복 호출 →
+        // 광고 보너스 피자 2배 중복 지급.
+        if (_adBonusClaimed) yield break; // 혹시 모를 재진입 이중 방어
+        _adBonusClaimed = true;
+
         if (adBonusButton != null) adBonusButton.interactable = false;
 
         if (SupabaseManager.Instance == null || GameManager.Instance == null)
@@ -254,7 +416,6 @@ public class ResultController : MonoBehaviour
         while (!task.IsCompleted) yield return null;
 
         int bonusPizza = task.Result;
-        _adBonusClaimed = true;
 
         if (rewardText != null)
             rewardText.text = $"<color=#f39c12>🍕 {_earnedPizza} + {bonusPizza} 피자 획득! (광고 보너스)</color>";

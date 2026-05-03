@@ -31,6 +31,17 @@ public class MatchmakingEntry : Supabase.Postgrest.Models.BaseModel
 
 /// <summary>
 /// 자동 매칭 시스템.
+///
+/// [Fix #1] OnMatchFound 이벤트 시그니처를 Action → Action&lt;string, ushort&gt; 로 변경.
+///   - 기존: public event Action OnMatchFound;
+///     → MatchmakingUX.OnMatchFound(string ip, ushort port) 파라미터 없어 컴파일 에러
+///   - 수정: public event Action&lt;string, ushort&gt; OnMatchFound;
+///     → ip, port를 이벤트 페이로드로 전달 → MatchmakingUX가 직접 ConnectToGameServer 호출 가능
+///
+/// [Fix #2] CancelMatchmaking() 퍼블릭 메서드 추가 (CancelSearch 별칭).
+///   - MatchmakingUX.OnConfirmCancel() 및 ReconnectManager 에서 호출하던 메서드가 없어
+///     컴파일 에러 발생. CancelSearch()를 내부 구현으로 유지하고 외부 노출용 별칭 추가.
+///
 /// isDedicatedServerMode = true : 서버 프로세스로 동작 (큐 폴링 → 매칭 성사 → IP 배정).
 /// isDedicatedServerMode = false: 클라이언트로 동작 (큐 등록 → DB 상태 변경 대기).
 /// </summary>
@@ -61,10 +72,19 @@ public class MatchmakingManager : MonoBehaviour
     public event Action<int, int> OnQueueCountChanged;
     public event Action<float>    OnTimerUpdated;
     public event Action<string>   OnStatusMessageChanged;
-    public event Action           OnMatchFound;
-    public event Action           OnMatchmakingFailed;
+
+    // [Fix #1] Action → Action<string, ushort>: ip, port를 이벤트로 전달
+    public event Action<string, ushort> OnMatchFound;
+
+    // [Fix #2] MatchmakingUX/ReconnectManager 연동용 (원본은 OnMatchmakingFailed)
+    public event Action<string> OnMatchFailed;
+    // 원본 호환성 유지 (LobbyUIController.HandleMatchmakingFailed 구독 중)
+    public event Action         OnMatchmakingFailed;
 
     // ── 클라이언트 상태 ────────────────────────────────────────
+    /// <summary>현재 매칭 탐색 중인지 여부. 외부(LobbyUIController 등)에서 읽기 전용으로 사용.</summary>
+    public bool IsSearching => isSearching;
+
     private string          myQueueEntryId;
     private string          myPlayerId;
     private string          myNickname;
@@ -84,26 +104,21 @@ public class MatchmakingManager : MonoBehaviour
 
     private void Awake()
     {
-        if (Instance == null) 
-        { 
-            Instance = this; 
-            DontDestroyOnLoad(gameObject); 
+        if (Instance == null)
+        {
+            Instance = this;
+            DontDestroyOnLoad(gameObject);
         }
         else { Destroy(gameObject); return; }
 
-        // 커맨드라인 인자 -dedicatedServer 로 서버 모드 활성화
         if (Array.Exists(Environment.GetCommandLineArgs(), a => a == "-dedicatedServer"))
             isDedicatedServerMode = true;
     }
 
-    private void Start()
-    {
-        CheckServerMode();
-    }
+    private void Start()  => CheckServerMode();
 
     private void Update()
     {
-        // Inspector 토글 지원 (가드로 효율화: 실제 시작은 1회만)
         if (isDedicatedServerMode && !_isServerLoopRunning)
             CheckServerMode();
     }
@@ -119,145 +134,31 @@ public class MatchmakingManager : MonoBehaviour
 
     private void OnDestroy()
     {
-        // 매칭 중에만 정리. 매칭 성사 후 씬 전환 시에는 실행되지 않음.
         if (!isDedicatedServerMode && isSearching)
             _ = CancelSearchAsync();
     }
 
     // ════════════════════════════════════════════════════════════
-    //  ☁️ 서버 모드
+    //  퍼블릭 API — 외부 호출용
     // ════════════════════════════════════════════════════════════
 
-    private void StartServerMode()
+    /// <summary>
+    /// [Fix #2] MatchmakingUX, ReconnectManager에서 호출하는 표준 취소 메서드.
+    /// 내부적으로 CancelSearch()와 동일.
+    /// </summary>
+    public void CancelMatchmaking()
     {
-        ushort port   = GetServerPort();
-        string myIp   = GetMyServerIP();
-        Debug.Log($"[Server] ☁️ 매칭 서버 가동 (IP: {myIp}, Port: {port})");
-        AppNetworkManager.Instance?.StartAsDedicatedServer(port);
-        StartCoroutine(ServerMatchmakingLoop());
+        CancelSearch();
     }
-
-    private IEnumerator ServerMatchmakingLoop()
-    {
-        // Supabase 초기화 대기
-        while (SupabaseManager.Instance == null || !SupabaseManager.Instance.IsInitialized)
-            yield return new WaitForSeconds(1f);
-
-        Debug.Log("[Server] ✅ Supabase 연결 완료. 매칭 루프 시작.");
-
-        while (true)
-        {
-            yield return new WaitForSeconds(2f);
-            _ = ProcessServerMatchmaking();
-        }
-    }
-
-    private async Task ProcessServerMatchmaking()
-    {
-        try
-        {
-            // 대기 중인 플레이어 목록 (입장 순 정렬)
-            var response = await SupabaseManager.Instance.Client
-                .From<MatchmakingEntry>()
-                .Filter("status", Supabase.Postgrest.Constants.Operator.Equals, "waiting")
-                .Order("joined_at", Supabase.Postgrest.Constants.Ordering.Ascending)
-                .Get();
-
-            if (response?.Models == null) return;
-
-            var queue = response.Models.ToList();
-
-            // 서버 자신이 큐에 있으면 제외 (데디케이티드 서버가 클라이언트로 등록되면 안 됨)
-            string serverPlayerId = SupabaseManager.Instance?.Client.Auth.CurrentUser?.Id;
-            if (!string.IsNullOrEmpty(serverPlayerId))
-                queue = queue.Where(p => p.PlayerId != serverPlayerId).ToList();
-
-            if (queue.Count == 0) return;
-
-            // maxPlayers 단위로 즉시 매칭 (여러 매치 동시 처리)
-            while (queue.Count >= maxPlayers)
-            {
-                var batch = queue.Take(maxPlayers).ToList();
-                queue     = queue.Skip(maxPlayers).ToList();
-                await ExecuteServerMatch(batch);
-            }
-
-            if (queue.Count == 0) return;
-
-            // 남은 플레이어 중 가장 오래 기다린 플레이어 기준으로 판단
-            var oldest = queue[0];
-
-            // 서버 로컬 첫 감지 시각 등록 (DB joined_at 파싱 실패 대비)
-            foreach (var p in queue)
-                if (!_playerFirstSeen.ContainsKey(p.PlayerId))
-                    _playerFirstSeen[p.PlayerId] = DateTime.UtcNow;
-
-            // 대기 시간 계산: DB 값 우선, 실패 시 서버 로컬 시각 사용
-            float waitSec = GetWaitSeconds(oldest.JoinedAt);
-            if (waitSec <= 0f && _playerFirstSeen.TryGetValue(oldest.PlayerId, out DateTime firstSeen))
-                waitSec = (float)(DateTime.UtcNow - firstSeen).TotalSeconds;
-
-            if (waitSec >= maxWaitSeconds)
-            {
-                if (queue.Count >= minPlayers)
-                {
-                    // 최소 인원 충족 → 현재 인원으로 즉시 시작
-                    await ExecuteServerMatch(queue);
-                }
-                else
-                {
-                    // 인원 부족 → 서버가 해당 플레이어 큐에서 제거
-                    var param = new Dictionary<string, object> { { "p_player_id", oldest.PlayerId } };
-                    await SupabaseManager.Instance.Client.Rpc<string>("leave_matchmaking_queue", param);
-                }
-            }
-        }
-        catch (Exception e) { Debug.LogError($"[Server] 매칭 처리 오류: {e.Message}"); }
-    }
-
-    private async Task ExecuteServerMatch(List<MatchmakingEntry> players)
-    {
-        // 매칭된 플레이어 로컬 추적에서 제거
-        foreach (var p in players)
-            _playerFirstSeen.Remove(p.PlayerId);
-
-        string ip       = GetMyServerIP();
-        ushort port     = GetServerPort();
-        string endpoint = $"{ip}:{port}"; // "1.2.3.4:7777" 형태로 room_id에 저장
-
-        Debug.Log($"[Server] 🚀 매칭 성사 ({players.Count}명) → {endpoint}");
-
-        try
-        {
-            var param = new Dictionary<string, object>
-            {
-                { "p_queue_ids", players.Select(p => p.Id).ToList() },
-                { "p_server_ip", endpoint }
-            };
-            await SupabaseManager.Instance.Client.Rpc<string>("server_assign_match", param);
-
-            if (Unity.Netcode.NetworkManager.Singleton != null &&
-                Unity.Netcode.NetworkManager.Singleton.IsServer)
-            {
-                Debug.Log($"[Server] 씬 로드 {sceneLoadDelaySeconds}초 전 대기 중 (클라이언트 접속 대기)...");
-                await System.Threading.Tasks.Task.Delay((int)(sceneLoadDelaySeconds * 1000));
-
-                Debug.Log("[Server] 🎬 인게임 씬 로드 시작...");
-                Unity.Netcode.NetworkManager.Singleton.SceneManager
-                    .LoadScene("InGameScene", UnityEngine.SceneManagement.LoadSceneMode.Single);
-            }
-        }
-        catch (Exception e) { Debug.LogError($"[Server] 매칭 DB 업데이트 실패: {e.Message}"); }
-    }
-
-    // ════════════════════════════════════════════════════════════
-    //  📱 클라이언트 모드
-    // ════════════════════════════════════════════════════════════
 
     public async void StartSearch()
     {
         if (isDedicatedServerMode || isSearching) return;
-        if (!ValidateSupabase()) { OnMatchmakingFailed?.Invoke(); return; }
+        if (!ValidateSupabase())
+        {
+            FireMatchFailed("Supabase 초기화 안 됨");
+            return;
+        }
 
         isSearching  = true;
         matchCreated = false;
@@ -271,7 +172,7 @@ public class MatchmakingManager : MonoBehaviour
         {
             NotifyStatus("로그인이 필요합니다.");
             isSearching = false;
-            OnMatchmakingFailed?.Invoke();
+            FireMatchFailed("로그인 필요");
             return;
         }
 
@@ -281,7 +182,7 @@ public class MatchmakingManager : MonoBehaviour
         if (!await InsertQueueEntry())
         {
             isSearching = false;
-            OnMatchmakingFailed?.Invoke();
+            FireMatchFailed("큐 등록 실패");
             return;
         }
 
@@ -295,8 +196,12 @@ public class MatchmakingManager : MonoBehaviour
         if (!isSearching || isDedicatedServerMode) return;
         await CancelSearchAsync();
         NotifyStatus("매칭이 취소되었습니다.");
-        OnMatchmakingFailed?.Invoke();
+        FireMatchFailed("사용자 취소");
     }
+
+    // ════════════════════════════════════════════════════════════
+    //  클라이언트 — 내부 흐름
+    // ════════════════════════════════════════════════════════════
 
     private IEnumerator ClientWaitTimer()
     {
@@ -318,6 +223,11 @@ public class MatchmakingManager : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// [Fix #1] HandleMatchSuccess — ip, port를 OnMatchFound 이벤트 페이로드로 전달.
+    /// 기존에는 파라미터 없는 OnMatchFound?.Invoke() 였으므로
+    /// MatchmakingUX가 IP/Port를 알 수 없어 씬 전환 불가.
+    /// </summary>
     private void HandleMatchSuccess(string endpoint)
     {
         if (matchCreated) return;
@@ -348,12 +258,16 @@ public class MatchmakingManager : MonoBehaviour
             GameManager.Instance.myCharacterData = StatCalculator.GenerateRandomCharacter(myNickname);
         }
 
-
         NotifyStatus("매칭 완료! 게임 서버로 접속합니다...");
-        OnMatchFound?.Invoke();
 
-        AppNetworkManager.Instance?.ConnectToGameServer(ip, port);
-        // StartCoroutine(LoadGameSceneDelay(2f)); // 클라이언트가 혼자 씬을 다시 로드하면 네트코드 동기화가 깨지므로 삭제합니다.
+        // [Fix #1] ip, port 페이로드 포함 발행 → MatchmakingUX.OnMatchFound(ip, port) 수신
+        OnMatchFound?.Invoke(ip, port);
+
+        // MatchmakingUX가 없는 환경(구형 LobbyUIController)에서는 여기서 즉시 연결.
+        if (FindAnyObjectByType<MatchmakingUX>() == null)
+        {
+            AppNetworkManager.Instance?.ConnectToGameServer(ip, port);
+        }
     }
 
     private void HandleServerCancelledMatch()
@@ -362,18 +276,207 @@ public class MatchmakingManager : MonoBehaviour
         Debug.Log("[Matchmaking] 서버에 의해 매칭이 취소되었습니다 (인원 부족).");
         _ = CancelSearchAsync();
         NotifyStatus("매칭 인원 부족으로 취소되었습니다.");
+        FireMatchFailed("서버 취소");
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  이벤트 발행 내부 유틸
+    // ════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// OnMatchFailed(string)과 OnMatchmakingFailed() 를 동시에 발행합니다.
+    /// LobbyUIController(파라미터 없는 이벤트)와
+    /// MatchmakingUX(파라미터 있는 이벤트) 양쪽을 모두 지원.
+    /// </summary>
+    private void FireMatchFailed(string reason)
+    {
+        OnMatchFailed?.Invoke(reason);
         OnMatchmakingFailed?.Invoke();
     }
 
-    private IEnumerator LoadGameSceneDelay(float delay)
+    private void NotifyStatus(string msg)
     {
-        yield return new WaitForSeconds(delay);
-        GameManager.Instance?.LoadScene("InGameScene");
+        Debug.Log($"[Matchmaking] {msg}");
+        OnStatusMessageChanged?.Invoke(msg);
     }
 
     // ════════════════════════════════════════════════════════════
-    //  📡 Supabase Realtime 콜백
+    //  ☁️ 서버 모드
     // ════════════════════════════════════════════════════════════
+
+    private void StartServerMode()
+    {
+        ushort port   = GetServerPort();
+        string myIp   = GetMyServerIP();
+
+        // [FIX] 루프백 IP(127.0.0.1) 경고 및 자동 공인 IP 감지.
+        if (myIp == "127.0.0.1" || myIp == "localhost")
+        {
+            string detectedIp = DetectLocalIPv4();
+            if (!string.IsNullOrEmpty(detectedIp))
+            {
+                Debug.LogWarning($"[Server] 공인 IP 미설정 — 로컬 IP 자동 감지: {detectedIp}\n" +
+                                 "출시 빌드에서는 -serverIp <공인IP> 또는 GAME_SERVER_IP 환경변수를 반드시 설정하세요.");
+                myIp = detectedIp;
+            }
+            else
+            {
+                Debug.LogError("[Server] 서버 공인 IP가 127.0.0.1입니다. 클라이언트 접속 불가.\n" +
+                               "-serverIp <공인IP> 또는 GAME_SERVER_IP 환경변수를 설정하세요.");
+            }
+        }
+
+        Debug.Log($"[Server] ☁️ 매칭 서버 가동 (IP: {myIp}, Port: {port})");
+        AppNetworkManager.Instance?.StartAsDedicatedServer(port);
+        _ = RunServerLoop();
+    }
+
+    private static string DetectLocalIPv4()
+    {
+        try
+        {
+            var host = System.Net.Dns.GetHostEntry(System.Net.Dns.GetHostName());
+            foreach (var ip in host.AddressList)
+            {
+                if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork &&
+                    !System.Net.IPAddress.IsLoopback(ip))
+                    return ip.ToString();
+            }
+        }
+        catch (Exception e) { Debug.LogWarning($"[Server] 로컬 IP 감지 실패: {e.Message}"); }
+        return string.Empty;
+    }
+
+    private async Task RunServerLoop()
+    {
+        // Supabase 초기화 대기
+        while (SupabaseManager.Instance == null || !SupabaseManager.Instance.IsInitialized)
+            await Task.Delay(1000);
+
+        Debug.Log("[Server] ✅ Supabase 연결 완료. 매칭 루프 시작.");
+
+        while (true)
+        {
+            await Task.Delay(2000);
+            if (!ValidateSupabase()) continue;
+            try
+            {
+                var queue = await FetchWaitingPlayers();
+                UpdatePlayerFirstSeen(queue);
+                var eligible = GetEligiblePlayers(queue);
+                if (eligible.Count >= minPlayers)
+                    await ExecuteServerMatch(eligible);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[Server] 매칭 처리 오류: {e.Message}");
+            }
+        }
+    }
+
+    private async Task<List<MatchmakingEntry>> FetchWaitingPlayers()
+    {
+        // 서버 자신 제외
+        string serverPlayerId = SupabaseManager.Instance?.Client.Auth.CurrentUser?.Id;
+
+        var response = await SupabaseManager.Instance.Client
+            .From<MatchmakingEntry>()
+            .Filter("status", Supabase.Postgrest.Constants.Operator.Equals, "waiting")
+            .Order("joined_at", Supabase.Postgrest.Constants.Ordering.Ascending)
+            .Get();
+
+        var result = response?.Models?.ToList() ?? new List<MatchmakingEntry>();
+
+        if (!string.IsNullOrEmpty(serverPlayerId))
+            result = result.Where(p => p.PlayerId != serverPlayerId).ToList();
+
+        return result;
+    }
+
+    private void UpdatePlayerFirstSeen(List<MatchmakingEntry> queue)
+    {
+        var ids = new HashSet<string>(queue.Select(p => p.PlayerId));
+        foreach (var k in _playerFirstSeen.Keys.ToList())
+            if (!ids.Contains(k)) _playerFirstSeen.Remove(k);
+        foreach (var p in queue)
+            if (!_playerFirstSeen.ContainsKey(p.PlayerId))
+                _playerFirstSeen[p.PlayerId] = DateTime.UtcNow;
+    }
+
+    private List<MatchmakingEntry> GetEligiblePlayers(List<MatchmakingEntry> queue)
+    {
+        if (queue.Count == 0) return new List<MatchmakingEntry>();
+
+        // maxPlayers 단위로 즉시 매칭
+        if (queue.Count >= maxPlayers)
+            return queue.Take(maxPlayers).ToList();
+
+        // 대기 시간 초과 시 minPlayers 충족이면 시작
+        bool timeoutReached = _playerFirstSeen.Values.Any(t =>
+            (DateTime.UtcNow - t).TotalSeconds >= maxWaitSeconds);
+
+        if (timeoutReached && queue.Count >= minPlayers)
+            return queue.Take(maxPlayers).ToList();
+
+        return new List<MatchmakingEntry>();
+    }
+
+    private async Task ExecuteServerMatch(List<MatchmakingEntry> players)
+    {
+        foreach (var p in players) _playerFirstSeen.Remove(p.PlayerId);
+
+        string ip       = GetMyServerIP();
+        ushort port     = GetServerPort();
+        string endpoint = $"{ip}:{port}";
+
+        Debug.Log($"[Server] 🚀 매칭 성사 ({players.Count}명) → {endpoint}");
+
+        try
+        {
+            var param = new Dictionary<string, object>
+            {
+                { "p_queue_ids", players.Select(p => p.Id).ToList() },
+                { "p_server_ip", endpoint }
+            };
+            await SupabaseManager.Instance.Client.Rpc<string>("server_assign_match", param);
+
+            if (Unity.Netcode.NetworkManager.Singleton != null &&
+                Unity.Netcode.NetworkManager.Singleton.IsServer)
+            {
+                Debug.Log($"[Server] 씬 로드 {sceneLoadDelaySeconds}초 전 대기 중 (클라이언트 접속 대기)...");
+                await Task.Delay((int)(sceneLoadDelaySeconds * 1000));
+
+                Debug.Log("[Server] 🎬 인게임 씬 로드 시작...");
+                Unity.Netcode.NetworkManager.Singleton.SceneManager
+                    .LoadScene("InGameScene", UnityEngine.SceneManagement.LoadSceneMode.Single);
+            }
+        }
+        catch (Exception e) { Debug.LogError($"[Server] 매칭 DB 업데이트 실패: {e.Message}"); }
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  📡 Supabase Realtime 구독
+    // ════════════════════════════════════════════════════════════
+
+    private async Task SubscribeToQueue()
+    {
+        try
+        {
+            realtimeChannel = SupabaseManager.Instance.Client.Realtime.Channel("matchmaking_queue");
+
+            realtimeChannel.Register(new PostgresChangesOptions("public", "matchmaking_queue"));
+            realtimeChannel.AddPostgresChangeHandler(ListenType.Inserts,
+                (_, c) => MainThreadDispatcher.Enqueue(() => OnQueueInsert(c)));
+            realtimeChannel.AddPostgresChangeHandler(ListenType.Updates,
+                (_, c) => MainThreadDispatcher.Enqueue(() => OnQueueUpdate(c)));
+            realtimeChannel.AddPostgresChangeHandler(ListenType.Deletes,
+                (_, c) => MainThreadDispatcher.Enqueue(() => OnQueueDelete(c)));
+
+            await realtimeChannel.Subscribe();
+            await RefreshQueueSnapshot();
+        }
+        catch (Exception e) { Debug.LogError($"[Matchmaking] Realtime 구독 실패: {e.Message}"); }
+    }
 
     private void OnQueueInsert(PostgresChangesResponse change)
     {
@@ -397,7 +500,8 @@ public class MatchmakingManager : MonoBehaviour
         {
             var updated = change.Model<MatchmakingEntry>();
 
-            if (updated?.PlayerId != myPlayerId) return;
+            if (string.IsNullOrEmpty(myPlayerId)) return;
+            if (updated == null || updated.PlayerId != myPlayerId) return;
 
             if (updated.Status == "matched" && !string.IsNullOrEmpty(updated.RoomId))
                 HandleMatchSuccess(updated.RoomId);
@@ -426,7 +530,7 @@ public class MatchmakingManager : MonoBehaviour
                 PlayerId = myPlayerId,
                 Nickname = myNickname,
                 Status   = "waiting",
-                JoinedAt = DateTime.UtcNow.ToString("o"), // ISO 8601 형식으로 현재 UTC 시간 저장
+                JoinedAt = DateTime.UtcNow.ToString("o"),
                 RoomId   = null
             };
             var response = await SupabaseManager.Instance.Client.From<MatchmakingEntry>().Insert(newEntry);
@@ -444,26 +548,6 @@ public class MatchmakingManager : MonoBehaviour
         }
     }
 
-    private async Task SubscribeToQueue()
-    {
-        try
-        {
-            realtimeChannel = SupabaseManager.Instance.Client.Realtime.Channel("matchmaking_queue");
-
-            realtimeChannel.Register(new PostgresChangesOptions("public", "matchmaking_queue"));
-            realtimeChannel.AddPostgresChangeHandler(ListenType.Inserts,
-                (_, c) => MainThreadDispatcher.Enqueue(() => OnQueueInsert(c)));
-            realtimeChannel.AddPostgresChangeHandler(ListenType.Updates,
-                (_, c) => MainThreadDispatcher.Enqueue(() => OnQueueUpdate(c)));
-            realtimeChannel.AddPostgresChangeHandler(ListenType.Deletes,
-                (_, c) => MainThreadDispatcher.Enqueue(() => OnQueueDelete(c)));
-
-            await realtimeChannel.Subscribe();
-            await RefreshQueueSnapshot();
-        }
-        catch (Exception e) { Debug.LogError($"[Matchmaking] Realtime 구독 실패: {e.Message}"); }
-    }
-
     private async Task RefreshQueueSnapshot()
     {
         try
@@ -475,7 +559,8 @@ public class MatchmakingManager : MonoBehaviour
                 .Get();
 
             if (response?.Models != null)
-                currentQueue = response.Models;
+                // [FIX] ToList() 없이 직접 대입하면 OnQueueInsert에서 NotSupportedException 발생.
+                currentQueue = response.Models.ToList();
             NotifyQueueCount();
         }
         catch (Exception e) { Debug.LogError($"[Matchmaking] 큐 조회 실패: {e.Message}"); }
@@ -491,13 +576,14 @@ public class MatchmakingManager : MonoBehaviour
         currentQueue.Clear();
     }
 
-    private async Task UnsubscribeRealtime()
+    private Task UnsubscribeRealtime()
     {
         if (realtimeChannel != null)
         {
             try { realtimeChannel.Unsubscribe(); } catch { }
             realtimeChannel = null;
         }
+        return Task.CompletedTask;
     }
 
     private async Task CleanupMyPreviousEntry()
@@ -539,22 +625,6 @@ public class MatchmakingManager : MonoBehaviour
         return myServerPort;
     }
 
-    // DB joined_at 타임스탬프로부터 경과 초 계산 (서버 시간 기준, Time.time보다 정확)
-    private float GetWaitSeconds(string joinedAt)
-    {
-        if (string.IsNullOrEmpty(joinedAt)) return 0f;
-        try
-        {
-            // 다양한 ISO 8601 형식을 처리하기 위해 DateTimeOffset 사용 권장
-            if (DateTimeOffset.TryParse(joinedAt, out DateTimeOffset joined))
-            {
-                return (float)(DateTimeOffset.UtcNow - joined).TotalSeconds;
-            }
-            return 0f;
-        }
-        catch { return 0f; }
-    }
-
     private bool ValidateSupabase()
     {
         if (SupabaseManager.Instance == null || !SupabaseManager.Instance.IsInitialized)
@@ -571,5 +641,4 @@ public class MatchmakingManager : MonoBehaviour
     }
 
     private void NotifyQueueCount() => OnQueueCountChanged?.Invoke(currentQueue.Count, maxPlayers);
-    private void NotifyStatus(string msg) => OnStatusMessageChanged?.Invoke(msg);
 }

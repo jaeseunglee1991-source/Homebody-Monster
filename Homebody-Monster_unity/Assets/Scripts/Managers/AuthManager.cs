@@ -151,7 +151,8 @@ public class AuthManager : MonoBehaviour
         }
         finally
         {
-            SetBusy(false);
+            // preserveError: true — catch/내부 return에서 ShowError한 메시지를 보존
+            SetBusy(false, preserveError: true);
         }
     }
 
@@ -330,7 +331,9 @@ public class AuthManager : MonoBehaviour
         }
         finally
         {
-            SetBusy(false);
+            // preserveError: true — "이미 사용 중", "세션 만료", "저장 실패" 등
+            // try 내부 ShowError + return 이후 finally가 에러 텍스트를 덮어쓰지 않도록 보존
+            SetBusy(false, preserveError: true);
         }
     }
 
@@ -366,17 +369,34 @@ public class AuthManager : MonoBehaviour
     }
 
     /// <summary>로딩 중 모든 버튼을 비활성화하여 중복 탭을 방지합니다.</summary>
-    private void SetBusy(bool busy, string message = "")
+    /// <param name="busy">true = 로딩 진입, false = 로딩 해제</param>
+    /// <param name="message">busy=true일 때 표시할 안내 메시지 (선택)</param>
+    /// <param name="preserveError">
+    /// busy=false일 때 true로 지정하면 현재 에러 텍스트를 지우지 않습니다.
+    /// try 블록 안에서 ShowError + return 후 finally의 SetBusy(false)가
+    /// 에러 메시지를 즉시 지워버리는 문제를 방지하기 위해 사용합니다.
+    ///
+    /// [이전 버그]
+    /// try {
+    ///     ShowError("이미 사용 중인 닉네임입니다.");
+    ///     return;           ← try 탈출
+    /// } finally {
+    ///     SetBusy(false);   ← 반드시 실행
+    ///     // → ClearError() 호출 → 방금 표시한 에러가 즉시 지워짐
+    /// }
+    /// </param>
+    private void SetBusy(bool busy, string message = "", bool preserveError = false)
     {
         _isBusy = busy;
-        if (guestLoginButton    != null) guestLoginButton.interactable    = !busy;
-        if (googleLoginButton   != null) googleLoginButton.interactable   = !busy;
+        if (guestLoginButton     != null) guestLoginButton.interactable     = !busy;
+        if (googleLoginButton    != null) googleLoginButton.interactable    = !busy;
         if (submitNicknameButton != null) submitNicknameButton.interactable = !busy;
 
         if (busy && !string.IsNullOrEmpty(message))
             ShowError(message);
-        else if (!busy)
+        else if (!busy && !preserveError)
             ClearError();
+        // busy=false && preserveError=true → 에러 텍스트 유지 (아무것도 안 함)
     }
 
     private void ShowError(string msg)

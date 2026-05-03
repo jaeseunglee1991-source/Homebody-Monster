@@ -47,7 +47,20 @@ public class InGameManager : MonoBehaviour
 
     private readonly List<PlayerController> alivePlayers = new List<PlayerController>();
     // 클라이언트ID별 최종 순위 — OnPlayerDied 시점에 기록 (FinishGame 호출 시 alivePlayers.Count=1로 역산 불가)
-    private readonly Dictionary<ulong, int> _playerFinalRanks = new Dictionary<ulong, int>();
+    private readonly Dictionary<ulong, int>   _playerFinalRanks = new Dictionary<ulong, int>();
+    /// <summary>
+    /// 클라이언트ID별 사망 시각 (GetSyncedTime() 기준).
+    ///
+    /// [이전 버그]
+    /// FinishGame()에서 survived = GetSyncedTime() - gameStartTime 을 단일값으로 계산해
+    /// 모든 플레이어에게 동일하게 전달했음.
+    /// 결과적으로 1분에 죽은 플레이어도, 4분에 죽은 플레이어도 똑같이
+    /// 게임 전체 시간(예: 5분)이 survived_time으로 DB에 저장됨 → 전적 데이터 오염.
+    ///
+    /// [수정]
+    /// OnPlayerDied()에서 사망 시각을 기록하고, FinishGame()에서 개인별 경과 시간을 계산.
+    /// </summary>
+    private readonly Dictionary<ulong, float> _playerDeathTimes = new Dictionary<ulong, float>();
     private bool  gameEnded      = false;
     private float gameStartTime  = -1f; // NetworkManager.ServerTime 기준, -1 = 미설정
     private float cleanupTimer   = 0f;
@@ -122,7 +135,12 @@ public class InGameManager : MonoBehaviour
         // 예: 8명 중 6번째 사망 → 제거 후 생존 2명 → 순위 3위
         int rank = alivePlayers.Count + 1;
         if (deadPlayer.networkSync != null)
-            _playerFinalRanks[deadPlayer.networkSync.OwnerClientId] = rank;
+        {
+            ulong clientId = deadPlayer.networkSync.OwnerClientId;
+            _playerFinalRanks[clientId] = rank;
+            // 사망 시각 기록 — FinishGame에서 개인별 survived_time 계산에 사용
+            _playerDeathTimes[clientId] = GetSyncedTime();
+        }
 
         if (deadPlayer.IsLocalPlayer)
             _localPlayerFinalRank = rank;
@@ -141,6 +159,19 @@ public class InGameManager : MonoBehaviour
 
         if (!alivePlayers.Contains(revivedPlayer))
             alivePlayers.Add(revivedPlayer);
+
+        // [버그 수정] 부활 시 _playerFinalRanks·_playerDeathTimes에서 이전 사망 기록 제거.
+        // OnPlayerDied()에서 사망 시점에 순위와 사망 시각을 즉시 기록하는데,
+        // 삭제하지 않으면 부활 후 최종 1등을 해도 FinishGame()이
+        // _playerFinalRanks의 이전 사망 순위를 그대로 사용해 Supabase에 잘못된 순위가 저장됨.
+        // _playerDeathTimes도 제거해야 FinishGame()에서 survived_time이 올바르게 계산됨
+        // (부활자가 최종 생존하면 totalGameTime 폴백 경로를 타야 함).
+        if (revivedPlayer.networkSync != null)
+        {
+            ulong clientId = revivedPlayer.networkSync.OwnerClientId;
+            _playerFinalRanks.Remove(clientId);
+            _playerDeathTimes.Remove(clientId);
+        }
 
         RefreshHUD();
         Debug.Log($"[InGameManager] {revivedPlayer.myData?.playerName} 부활 → 생존자 {alivePlayers.Count}명");
@@ -325,7 +356,8 @@ public class InGameManager : MonoBehaviour
 
     private IEnumerator FinishGame(PlayerController winner)
     {
-        float survived = GetSyncedTime() - gameStartTime;
+        float gameEndTime   = GetSyncedTime();
+        float totalGameTime = gameEndTime - gameStartTime;
 
         // HUD 배너 표시 (listen-server 환경에서 호스트 화면용; 데디케이티드 서버는 HUD 없음)
         if (InGameHUD.Instance != null)
@@ -343,33 +375,59 @@ public class InGameManager : MonoBehaviour
         foreach (var p in FindObjectsByType<PlayerController>(FindObjectsSortMode.None))
         {
             if (p == null || p.networkSync == null) continue;
-            bool pIsWinner = winner != null && p == winner;
-            int  pRank = pIsWinner ? 1
-                : _playerFinalRanks.TryGetValue(p.networkSync.OwnerClientId, out int r) ? r
-                : alivePlayers.Count + 1; // 폴백: 아직 살아있다면 1위 근처
+
+            bool  pIsWinner = winner != null && p == winner;
+            ulong clientId  = p.networkSync.OwnerClientId;
+
+            int pRank = pIsWinner ? 1
+                : _playerFinalRanks.TryGetValue(clientId, out int r) ? r
+                : alivePlayers.Count + 1;
+
+            // [Fix] 개인별 survived_time 계산.
+            // 이전: 모든 플레이어에게 totalGameTime(게임 전체 경과)을 동일하게 전달
+            //       → 1분 만에 죽은 플레이어도 5분짜리 게임이면 survived_time = 5분으로 저장
+            // 수정: 생존자(winner)는 totalGameTime, 사망자는 사망 시각까지의 경과 사용
+            float pSurvived;
+            if (pIsWinner || !_playerDeathTimes.TryGetValue(clientId, out float deathTime))
+                pSurvived = totalGameTime;
+            else
+                pSurvived = deathTime - gameStartTime;
+
             var rpcParams = new Unity.Netcode.ClientRpcParams
             {
                 Send = new Unity.Netcode.ClientRpcSendParams
-                    { TargetClientIds = new[] { p.networkSync.OwnerClientId } }
+                    { TargetClientIds = new[] { clientId } }
             };
-            p.networkSync.NotifyMatchResultClientRpc(pIsWinner, pRank, p.killCount, survived, rpcParams);
+            // [Fix] p.killCount는 클라이언트 로컬 필드로 서버에서 HandleKillCountChanged 콜백이
+            // 호출되지 않아 항상 0. 서버에서 직접 쓰이는 NetworkKillCount.Value를 사용해야 함.
+            int pKills = p.networkSync.NetworkKillCount.Value;
+            p.networkSync.NotifyMatchResultClientRpc(pIsWinner, pRank, pKills, pSurvived, rpcParams);
         }
 
+        // [FIX] SaveMatchResult 완료 전 씬 전환으로 DB 저장 누락 버그.
+        // NotifyMatchResultClientRpc 수신 측에서 _ = SaveMatchResultAsync()를 실행하지만
+        // 서버가 즉시 LoadScene을 호출하면 PlayerNetworkSync(destroyWithScene:true)가
+        // Destroy되면서 진행 중인 Task가 고아가 되어 DB 저장이 완료되지 않음.
+        // → Supabase 네트워크 왕복 충분히 대기 후 씬 전환 (2초 추가).
+        yield return new WaitForSeconds(2f);
+
         // ── NGO SceneManager로 전체 씬 전환 ────────────────────────
-        // GameManager.LoadScene(로컬) 대신 NGO SceneManager 사용:
-        // 서버가 호출하면 연결된 모든 클라이언트가 동시에 씬을 전환합니다.
         var netMgr = Unity.Netcode.NetworkManager.Singleton;
         if (netMgr != null && netMgr.IsServer)
-            netMgr.SceneManager.LoadScene("ResultScene", LoadSceneMode.Single);
+            netMgr.SceneManager.LoadScene(GameManager.SceneResult, LoadSceneMode.Single);
     }
 
     private PlayerController GetHighestHpPlayer()
     {
+        // [Fix] p.myData.currentHp 대신 NetworkHp.Value를 기준으로 비교.
+        // myData.currentHp는 클라이언트 로컬 캐시이며, _serverData와 별개 객체일 수 있음.
+        // NetworkHp.Value는 서버가 직접 갱신하는 단일 진실 공급원으로 더 정확함.
         PlayerController best = null; float maxHp = -1f;
         foreach (var p in alivePlayers)
         {
-            if (p.myData != null && p.myData.currentHp > maxHp)
-            { maxHp = p.myData.currentHp; best = p; }
+            if (p.networkSync == null) continue;
+            float hp = p.networkSync.NetworkHp.Value;
+            if (hp > maxHp) { maxHp = hp; best = p; }
         }
         return best;
     }

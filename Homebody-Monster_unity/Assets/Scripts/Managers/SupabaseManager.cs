@@ -36,7 +36,7 @@ public class UserProfile : Supabase.Postgrest.Models.BaseModel
 ///   grant_ad_reward(p_reward_type)                                                    → boolean
 ///   grant_match_rewards(p_rank, p_kill_count, p_ad_doubled)                          → integer
 /// </summary>
-public class SupabaseManager : MonoBehaviour
+public partial class SupabaseManager : MonoBehaviour
 {
     public static SupabaseManager Instance { get; private set; }
 
@@ -506,9 +506,9 @@ public class SupabaseManager : MonoBehaviour
     /// 로비 채팅 채널 구독을 해제합니다.
     /// 씬 전환(로비 → 인게임) 또는 앱 종료 시 호출하세요.
     /// </summary>
-    public async Task UnsubscribeLobbyChat()
+    public Task UnsubscribeLobbyChat()
     {
-        if (_lobbyChatChannel == null) return;
+        if (_lobbyChatChannel == null) return Task.CompletedTask;
 
         try
         {
@@ -525,6 +525,7 @@ public class SupabaseManager : MonoBehaviour
             _lobbyPresence = null;
             _isLobbyChannelSubscribed = false;
         }
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -554,9 +555,25 @@ public class SupabaseManager : MonoBehaviour
         if (message.Length > MaxChatMessageLength)
             message = message.Substring(0, MaxChatMessageLength);
 
+        // [Fix] 쿨다운 타임스탬프를 await 이전에 갱신 (낙관적 잠금).
+        //
+        // 이전 버그:
+        //   쿨다운 체크 통과 → await Send() 시작 → (대기 중) → _lastChatSendTime 갱신
+        //   await 완료 전에 두 번째 Send 호출이 들어오면 _lastChatSendTime이 아직 갱신 전이므로
+        //   쿨다운 체크를 통과 → 두 메시지가 동시에 전송됨 (쿨다운 무력화).
+        //   모바일에서 전송 버튼을 빠르게 두 번 탭하면 재현됨.
+        //
+        // 수정:
+        //   await 이전에 _lastChatSendTime을 선점(optimistic lock)으로 갱신.
+        //   전송 실패 시 _lastChatSendTime을 복구하여 즉시 재시도 허용.
+        _lastChatSendTime = Time.time;
+
         try
         {
-            await _lobbyChatChannel.Send(
+            // Supabase C# SDK 버그 우회: 
+            // Broadcast 이벤트 전송 시 서버가 ACK를 반환하지 않으면 await가 영구 대기(Hang)에 빠질 수 있습니다.
+            // 어차피 Broadcast는 Fire-and-forget 속성이므로, await 하지 않고 즉시 성공으로 처리합니다.
+            _ = _lobbyChatChannel.Send(
                 Supabase.Realtime.Constants.ChannelEventName.Broadcast,
                 "chat_message",
                 new LobbyChatPayload
@@ -567,11 +584,12 @@ public class SupabaseManager : MonoBehaviour
                 }
             );
 
-            _lastChatSendTime = Time.time;
             return true;
         }
         catch (System.Exception e)
         {
+            // 전송 실패 시 쿨다운 복구 — 네트워크 오류 시 즉시 재시도 허용
+            _lastChatSendTime = -999f;
             Debug.LogError($"[Supabase] 채팅 전송 실패: {e.Message}");
             return false;
         }

@@ -60,3 +60,8 @@ Homebody-Monster_unity/crashlytics_build_config.json
 
 # ParrelSync Clones
 *_clone_*/
+
+# Sensitive Configs
+Homebody-Monster_unity/Assets/Resources/SupabaseConfig.asset
+Homebody-Monster_unity/Assets/Resources/SupabaseConfig.asset.meta
+

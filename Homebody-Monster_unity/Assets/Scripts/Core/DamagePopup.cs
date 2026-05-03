@@ -5,29 +5,52 @@ using System.Collections;
 public class DamagePopup : MonoBehaviour
 {
     [Header("References")]
-    public TextMeshProUGUI displayText; 
+    public TextMeshProUGUI displayText;
 
     [Header("Animation Settings")]
-    public float riseSpeed   = 1.2f;   
-    public float fadeDuration = 0.8f;  
-    public float lifetime    = 1.0f;   
+    public float riseSpeed    = 1.2f;
+    public float fadeDuration = 0.8f;
+    public float lifetime     = 1.0f;
 
-    private Color textColor;
+    private Color     _textColor;
+    private Coroutine _animRoutine;
+
+    // ── 풀 연동 ───────────────────────────────────────────────
+
+    public void OnGetFromPool()
+    {
+        gameObject.SetActive(true);
+    }
+
+    public void OnReleaseToPool()
+    {
+        if (_animRoutine != null)
+        {
+            StopCoroutine(_animRoutine);
+            _animRoutine = null;
+        }
+        gameObject.SetActive(false);
+    }
+
+    // ── 공개 API ──────────────────────────────────────────────
 
     public void Setup(string text, Color color)
     {
         if (displayText != null)
         {
-            displayText.text = text;
+            displayText.text  = text;
             displayText.color = color;
-            textColor = color;
+            _textColor        = color;
         }
 
         float scale = (text.Contains("!") || text == "MISS") ? 1.3f : 1.0f;
         transform.localScale = Vector3.one * scale;
 
-        StartCoroutine(AnimateRoutine());
+        if (_animRoutine != null) StopCoroutine(_animRoutine);
+        _animRoutine = StartCoroutine(AnimateRoutine());
     }
+
+    // ── 내부 애니메이션 ───────────────────────────────────────
 
     private IEnumerator AnimateRoutine()
     {
@@ -42,13 +65,14 @@ public class DamagePopup : MonoBehaviour
             if (elapsed > fadeStart && displayText != null)
             {
                 float alpha = 1f - ((elapsed - fadeStart) / fadeDuration);
-                textColor.a = Mathf.Clamp01(alpha);
-                displayText.color = textColor;
+                _textColor.a      = Mathf.Clamp01(alpha);
+                displayText.color = _textColor;
             }
 
             yield return null;
         }
 
-        Destroy(gameObject);
+        _animRoutine = null;
+        DamagePopupPool.Instance.Release(this);
     }
 }

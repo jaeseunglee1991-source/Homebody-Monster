@@ -18,9 +18,31 @@ public class PlayerController : NetworkBehaviour
     public float attackCooldown = 0.8f;
     public LayerMask enemyLayer;
     [Header("Visual")]
-    public DamagePopup damagePopupPrefab;
     public SpriteRenderer spriteRenderer;
     public Animator animator;
+
+    [Header("Trap Settings")]
+    [Tooltip("덫 위치를 나타낼 시각 오브젝트 프리팹. 미설정 시 텍스트 팝업으로 폴백합니다.")]
+    public GameObject trapVisualPrefab;
+
+    // 배치된 덫 시각 오브젝트 추적 (위치 → GameObject)
+    // RemoveTrapVisualClientRpc에서 정확한 오브젝트를 찾아 제거하기 위해 사용
+    private readonly Dictionary<Vector2, GameObject> _trapVisuals
+        = new Dictionary<Vector2, GameObject>();
+
+    public void RegisterTrapVisual(Vector2 pos, GameObject go)
+    {
+        if (go != null) _trapVisuals[pos] = go;
+    }
+
+    public void UnregisterTrapVisual(Vector2 pos)
+    {
+        if (_trapVisuals.TryGetValue(pos, out var go))
+        {
+            if (go != null) Object.Destroy(go);
+            _trapVisuals.Remove(pos);
+        }
+    }
 
     // NGO IsOwner로 대체 — IsLocalPlayer 외부 set은 제거 (NetworkBehaviour에서 관리)
     public new bool IsLocalPlayer => IsOwner;
@@ -95,9 +117,20 @@ public class PlayerController : NetworkBehaviour
 
     private void Update()
     {
-        if (IsDead || !IsOwner) return;
-        HandleJoystickInput();
-        HandleTouchAttackInput();
+        if (IsDead) return;
+
+        if (IsOwner)
+        {
+            HandleJoystickInput();
+            HandleTouchAttackInput();
+        }
+
+        // [FIX] UpdateAnimation을 IsOwner 조건 밖으로 이동.
+        // 기존: !IsOwner이면 UpdateAnimation()을 호출하지 않아
+        //        다른 플레이어 캐릭터의 spriteRenderer.flipX가 전혀 갱신되지 않음.
+        //        → 다른 플레이어가 왼쪽으로 이동해도 항상 오른쪽을 바라보는 버그.
+        // 수정: 모든 플레이어에 대해 UpdateAnimation()을 호출.
+        //        flipX는 moveDir(Owner) 또는 networkSync.NetworkMoveDir(비Owner)을 기준으로 갱신.
         UpdateAnimation();
     }
 
@@ -133,6 +166,11 @@ public class PlayerController : NetworkBehaviour
         moveDir.x = movementJoystick.Horizontal;
         moveDir.y = movementJoystick.Vertical;
         if (moveDir.sqrMagnitude > 0.01f) { isChasing = false; targetEnemy = null; }
+
+        // [FIX] 이동 방향을 NetworkVariable에 동기화하여 다른 클라이언트에서 flipX 갱신
+        if (networkSync != null && networkSync.IsOwner &&
+            Vector2.Distance(networkSync.NetworkMoveDir.Value, moveDir) > 0.05f)
+            networkSync.NetworkMoveDir.Value = moveDir;
     }
 
     private void HandleTouchAttackInput()
@@ -216,22 +254,35 @@ public class PlayerController : NetworkBehaviour
             networkSync.RequestAttackServerRpc(targetNetObj.NetworkObjectId);
 
         if (animator != null) animator.SetTrigger("Attack");
+        AudioManager.Instance?.PlayAttackHit();
     }
 
     // ════════════════════════════════════════════════════════════
     //  스킬 — 서버 RPC 요청
     // ════════════════════════════════════════════════════════════
 
-    public void UseSkill(int slotIndex)
+    // [FIX] void → bool 반환으로 변경.
+    // InGameHUD.OnSkillClicked에서 성공 여부와 무관하게 쿨다운 UI를 항상 시작하는 버그 수정.
+    // IsSilenced(IceShield), IsDead 등으로 RPC가 차단된 경우 false를 반환해 쿨다운을 막음.
+    public bool UseSkill(int slotIndex)
     {
-        if (IsDead || myData == null || slotIndex >= myData.activeSkills.Count) return;
-        if (StatusFX.IsSilenced) return; // 클라이언트 1차 검증
+        if (IsDead || myData == null || slotIndex >= myData.activeSkills.Count) return false;
+        if (StatusFX.IsSilenced) return false; // 클라이언트 1차 검증
 
         Vector2 targetPos = Rb.position + GetFacingDirection() * 4f;
         if (targetEnemy != null && !targetEnemy.IsDead)
             targetPos = targetEnemy.Rb.position;
 
-        networkSync.RequestUseSkillServerRpc(slotIndex, targetPos);
+        // [버그 수정] 시전 시점의 바라보는 방향을 RPC 파라미터로 함께 전달.
+        // GetFacingDirection()은 moveDir·spriteRenderer.flipX 를 읽는데,
+        // 이 값들은 클라이언트 Update()에서만 갱신되므로 서버에서는 항상 Vector2.right.
+        // ChargeStrike·Shockwave·Bulldozer·Shuriken·Sweep(Cone) 등
+        // targetPos 없이 방향만으로 판정하는 스킬들이 항상 오른쪽으로 발동되는 버그.
+        // → 클라이언트에서 정확한 방향을 캡처해 서버로 전달하여 해결.
+        Vector2 facingDir = GetFacingDirection();
+
+        networkSync.RequestUseSkillServerRpc(slotIndex, targetPos, facingDir);
+        return true;
     }
 
     // ════════════════════════════════════════════════════════════
@@ -253,6 +304,9 @@ public class PlayerController : NetworkBehaviour
     // ════════════════════════════════════════════════════════════
 
     public void RecalculateMoveSpeed() { /* StatCalculator 연동 시 여기서 캐시 갱신 */ }
+
+    // 서버에서 _serverData와 myData를 동일 객체로 연결하기 위해 사용
+    public void SetMyData(CharacterData data) { myData = data; }
 
     public void SetMovementLocked(bool locked)
     {
@@ -290,43 +344,41 @@ public class PlayerController : NetworkBehaviour
     public void PlaySkillVisuals(ActiveSkillType skill, Vector2 targetPos)
     {
         if (animator != null) animator.SetTrigger("Attack");
+        AudioManager.Instance?.PlaySkillSound(skill);
         // TODO: skill 타입별 파티클 Instantiate
         // 예: if (skill == ActiveSkillType.Fireball) Instantiate(fireballVfxPrefab, transform.position, Quaternion.identity);
     }
 
     public void ShowDotPopup(float dmg, Color color)
     {
-        if (damagePopupPrefab == null) return;
-        var popup = Instantiate(damagePopupPrefab, transform.position + Vector3.up * 0.5f, Quaternion.identity);
-        popup.Setup(dmg > 0f ? $"{dmg:0.#}" : "BLOCK", color);
+        if (DamagePopupPool.Instance == null) return;
+        DamagePopupPool.Instance.Spawn(transform.position + Vector3.up * 0.5f,
+            dmg > 0f ? $"{dmg:0.#}" : "BLOCK", color);
     }
 
     public void ShowSkillDamagePopup(float dmg, Color color)
     {
-        if (damagePopupPrefab == null) return;
-        var popup = Instantiate(damagePopupPrefab, transform.position + Vector3.up * 0.7f, Quaternion.identity);
-        popup.Setup($"{dmg:0.#}", color);
+        if (DamagePopupPool.Instance == null) return;
+        DamagePopupPool.Instance.Spawn(transform.position + Vector3.up * 0.7f, $"{dmg:0.#}", color);
     }
 
     public void ShowSkillPopup(string text)
     {
-        if (damagePopupPrefab == null) return;
-        var popup = Instantiate(damagePopupPrefab, transform.position + Vector3.up * 1f, Quaternion.identity);
-        popup.Setup(text, Color.yellow);
+        if (DamagePopupPool.Instance == null) return;
+        DamagePopupPool.Instance.Spawn(transform.position + Vector3.up * 1f, text, Color.yellow);
     }
 
     public void ShowDamagePopupNetwork(DamageResult result)
     {
-        if (damagePopupPrefab == null) return;
+        if (DamagePopupPool.Instance == null) return;
         string text; Color color;
-        if      (result.isEvaded)            { text = "MISS";             color = Color.gray;                  }
-        else if (result.isDivineGraceBlocked){ text = "BLOCKED";          color = Color.yellow;                }
-        else if (result.isWorldCollapse)     { text = "COLLAPSE!";        color = Color.magenta;               }
-        else if (result.isLuckyStrike)       { text = $"{result.finalDamage:0.#}*"; color = new Color(1f,0.8f,0f); }
-        else if (result.isCritical)          { text = $"{result.finalDamage:0.#}!"; color = Color.yellow;      }
-        else                                 { text = $"{result.finalDamage:0.#}";  color = Color.white;       }
-        var popup = Instantiate(damagePopupPrefab, transform.position + Vector3.up * 0.5f, Quaternion.identity);
-        popup.Setup(text, color);
+        if      (result.isEvaded)            { text = "MISS";                        color = Color.gray;             }
+        else if (result.isDivineGraceBlocked){ text = "BLOCKED";                     color = Color.yellow;           }
+        else if (result.isWorldCollapse)     { text = "COLLAPSE!";                   color = Color.magenta;          }
+        else if (result.isLuckyStrike)       { text = $"{result.finalDamage:0.#}*";  color = new Color(1f,0.8f,0f); }
+        else if (result.isCritical)          { text = $"{result.finalDamage:0.#}!";  color = Color.yellow; AudioManager.Instance?.PlayCritical(); }
+        else                                 { text = $"{result.finalDamage:0.#}";   color = Color.white;           }
+        DamagePopupPool.Instance.Spawn(transform.position + Vector3.up * 0.5f, text, color);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -342,6 +394,7 @@ public class PlayerController : NetworkBehaviour
         movementLocked = true;
 
         if (animator != null) animator.SetTrigger("Die");
+        AudioManager.Instance?.PlayDeath();
         GetComponent<Collider2D>().enabled = false;
         if (Rb != null) Rb.simulated = false;
 
@@ -350,6 +403,10 @@ public class PlayerController : NetworkBehaviour
             spriteRenderer.color        = new Color(0.6f, 0.6f, 0.6f, 1f);
             spriteRenderer.sortingOrder = -10;
         }
+
+        // [FEATURE] 로컬 플레이어 사망 시 관전 모드 진입
+        if (IsLocalPlayer)
+            SpectatorManager.Instance?.EnterSpectator();
     }
 
     public void ReviveNetwork()
@@ -357,6 +414,7 @@ public class PlayerController : NetworkBehaviour
         if (!IsDead) return;
         IsDead         = false;
         movementLocked = false;
+        attackLocked   = false;
         isChasing      = false;
         targetEnemy    = null;
 
@@ -365,7 +423,7 @@ public class PlayerController : NetworkBehaviour
             animator.Rebind();
             animator.Update(0f);
         }
-
+        AudioManager.Instance?.PlayRevive();
         GetComponent<Collider2D>().enabled = true;
         if (Rb != null) Rb.simulated = true;
 
@@ -386,10 +444,16 @@ public class PlayerController : NetworkBehaviour
     private void UpdateAnimation()
     {
         if (animator == null) return;
-        animator.SetBool("IsMoving", moveDir.sqrMagnitude > 0.01f || isChasing);
+
+        // 비Owner: networkSync를 통해 서버에서 동기화된 이동 방향을 사용
+        Vector2 displayDir = IsOwner
+            ? moveDir
+            : (networkSync != null ? networkSync.NetworkMoveDir.Value : Vector2.zero);
+
+        animator.SetBool("IsMoving", displayDir.sqrMagnitude > 0.01f || isChasing);
         if (spriteRenderer == null) return;
-        if      (moveDir.x > 0.05f)  spriteRenderer.flipX = false;
-        else if (moveDir.x < -0.05f) spriteRenderer.flipX = true;
+        if      (displayDir.x > 0.05f)  spriteRenderer.flipX = false;
+        else if (displayDir.x < -0.05f) spriteRenderer.flipX = true;
     }
 
     private void OnDrawGizmosSelected()

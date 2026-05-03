@@ -21,6 +21,8 @@ public class AppNetworkManager : MonoBehaviour
     public event Action<List<string>> OnPlayerPresenceUpdated; // 상세 닉네임 목록 전달
     public event Action               OnClientConnected;
     public event Action<string>       OnClientDisconnected;  // 파라미터: 연결 해제 사유
+    /// <summary>로비 채팅 채널 구독이 완료되어 전송 가능 상태가 됐을 때 발생합니다.</summary>
+    public event Action               OnLobbyChatReady;
 
     private void Awake()
     {
@@ -79,26 +81,58 @@ public class AppNetworkManager : MonoBehaviour
         transport.SetConnectionData(ip, port);
 
         bool ok = NetworkManager.Singleton.StartClient();
-        if (ok) Debug.Log($"[AppNetworkManager] 🎮 게임 서버 접속 시작: {ip}:{port}");
-        else    Debug.LogError("[AppNetworkManager] 클라이언트 시작 실패");
+        if (ok)
+        {
+            Debug.Log($"[AppNetworkManager] 🎮 게임 서버 접속 시작: {ip}:{port}");
+            // [FEATURE] 재접속을 위해 서버 정보 저장
+            ReconnectManager.Instance?.RegisterServer(ip, port);
+        }
+        else
+            Debug.LogError("[AppNetworkManager] 클라이언트 시작 실패");
         return ok;
     }
 
-    public void Disconnect()
+    /// <summary>
+    /// NGO 연결과 로비 채팅 채널을 모두 정리합니다.
+    ///
+    /// [버그 수정] 기존 Disconnect()는 async void DisconnectLobbyChat()을
+    /// await 없이 fire-and-forget으로 호출한 뒤 즉시 NGO Shutdown()을 실행했습니다.
+    /// DisconnectLobbyChat 내부의 UntrackLobbyPresence / UnsubscribeLobbyChat이
+    /// 완료되기 전에 NGO가 종료되어 Supabase Presence가 해제되지 않고 남음.
+    /// 결과: 상대방 로비 접속자 수가 줄어들지 않는 '유령 접속자' 버그.
+    ///
+    /// 수정: DisconnectAsync()를 async Task로 변경하고 DisconnectLobbyChat()을
+    /// await로 완료 대기 후 NGO Shutdown()을 호출합니다.
+    /// 호출부(GameManager.ResetForNewMatch 등)에서 _ = DisconnectAsync() 패턴 사용.
+    /// </summary>
+    public async Task DisconnectAsync()
     {
-        // 로비 채팅 채널 정리 (씬 전환 시 구독 해제)
-        DisconnectLobbyChat();
+        // 1. Supabase Presence / 채팅 채널 완전 정리 후 NGO 종료
+        await DisconnectLobbyChatAsync();
 
-        if (NetworkManager.Singleton != null && (NetworkManager.Singleton.IsClient || NetworkManager.Singleton.IsConnectedClient))
+        if (NetworkManager.Singleton != null &&
+            (NetworkManager.Singleton.IsClient || NetworkManager.Singleton.IsConnectedClient))
             NetworkManager.Singleton.Shutdown();
     }
 
+    /// <summary>
+    /// 하위 호환용 동기 래퍼. fire-and-forget 이므로 Presence 해제 완료를
+    /// 보장하지 않습니다. 가능하면 DisconnectAsync()를 사용하세요.
+    /// </summary>
+    public void Disconnect() => _ = DisconnectAsync();
+
     /// <summary>로비 채팅 Realtime 채널만 정리합니다 (NGO 연결과 무관).</summary>
-    public async void DisconnectLobbyChat()
+    public async void DisconnectLobbyChat() => await DisconnectLobbyChatAsync();
+
+    /// <summary>
+    /// 로비 채팅 채널 정리 내부 구현 (awaitable).
+    /// DisconnectAsync()와 DisconnectLobbyChat() 양쪽에서 호출됩니다.
+    /// </summary>
+    private async Task DisconnectLobbyChatAsync()
     {
         if (SupabaseManager.Instance != null)
         {
-            SupabaseManager.Instance.OnLobbyChatReceived      -= HandleLobbyChatReceived;
+            SupabaseManager.Instance.OnLobbyChatReceived    -= HandleLobbyChatReceived;
             SupabaseManager.Instance.OnLobbyPresenceUpdated -= HandlePresenceUpdated;
             await SupabaseManager.Instance.UntrackLobbyPresence();
             await SupabaseManager.Instance.UnsubscribeLobbyChat();
@@ -118,6 +152,9 @@ public class AppNetworkManager : MonoBehaviour
             SupabaseManager.Instance.OnLobbyPresenceUpdated      -= HandlePresenceUpdated;   // 중복 방지
             SupabaseManager.Instance.OnLobbyPresenceUpdated      += HandlePresenceUpdated;
             await SupabaseManager.Instance.SubscribeLobbyChat();
+
+            // 채팅 채널 구독 완료 → LobbyUIController에 전송 버튼 활성화 신호
+            OnLobbyChatReady?.Invoke();
 
             // 채널 구독 완료 후 닉네임이 이미 로드된 경우 즉시 Track
             // (RefreshUserProfileUI가 먼저 끝난 경쟁 조건 방어)
@@ -168,19 +205,24 @@ public class AppNetworkManager : MonoBehaviour
         if (string.IsNullOrEmpty(nickname))
             nickname = GameManager.Instance?.currentPlayerId ?? "???"; // 닉네임 없으면 UID로 폴백
 
-        // [추가] 서버 전송보다 먼저 화면에 즉시 띄움 (로컬 에코 - 빠른 피드백)
         string formatted = $"[{nickname}]: {message}";
-        OnChatReceived?.Invoke(formatted);
 
         if (SupabaseManager.Instance != null && SupabaseManager.Instance.IsLobbyChatSubscribed)
         {
             bool sent = await SupabaseManager.Instance.SendLobbyChatMessage(nickname, message);
-            if (!sent)
+            if (sent)
             {
-                // 전송 실패 시 로컬에만 안내 표시
-                OnChatReceived?.Invoke("[시스템]: 메시지 전송에 실패했습니다. 잠시 후 다시 시도해주세요.");
+                // 전송 성공 시에만 로컬 에코 표시
+                // (Realtime Broadcast는 송신자에게 돌아오지 않으므로 직접 표시)
+                OnChatReceived?.Invoke(formatted);
             }
+            // 쿨다운 실패: 조용히 무시 (스팸 방지 — 의도된 동작)
         }
+        else if (SupabaseManager.Instance == null)
+        {
+            OnChatReceived?.Invoke("[시스템]: 채팅 서버에 연결되지 않았습니다.");
+        }
+        // IsLobbyChatSubscribed == false: 버튼 자체가 비활성화돼 있으므로 여기 진입 안 함
     }
 
     // ════════════════════════════════════════════════════════════

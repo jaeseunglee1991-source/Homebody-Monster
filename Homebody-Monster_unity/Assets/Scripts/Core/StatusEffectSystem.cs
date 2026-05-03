@@ -89,7 +89,20 @@ public class StatusEffectSystem : MonoBehaviour
         {
             // 지속시간 갱신 (서버-클라이언트 타이머 차이 보정)
             existing.duration = Mathf.Max(existing.duration, existing.elapsed + duration);
-            existing.value    = value;
+            // [FIX] 강한 효과가 약한 것으로 교체되는 버그.
+            // value(DoT 틱 데미지, Slow 비율, ShieldHp 등)는 클수록 강하므로
+            // duration과 동일하게 더 강한 값만 유지.
+            if (value > existing.value)
+            {
+                existing.value = value;
+                // [버그 수정] ShieldHp 갱신 시 myData.shieldHp 동기화 누락.
+                // OnEffectApplied는 신규 추가 경로에서만 호출되므로,
+                // IronSkin 재시전 시 effect.value는 갱신되지만
+                // 실제 피해 흡수에 쓰이는 myData.shieldHp는 소모된 값 그대로 유지됨.
+                // 값이 실제로 교체될 때만 동기화하여 더 약한 재시전은 무시.
+                if (type == StatusEffectType.ShieldHp && owner.myData != null)
+                    owner.myData.shieldHp = value;
+            }
             return;
         }
 
@@ -194,8 +207,13 @@ public class StatusEffectSystem : MonoBehaviour
             case StatusEffectType.DeathMarkTarget:
                 if (owner.myData != null)
                 {
-                    owner.myData.deathMarkActive      = true;
-                    owner.myData.deathMarkAccumulated = 0f;
+                    owner.myData.deathMarkActive       = true;
+                    owner.myData.deathMarkAccumulated  = 0f;
+                    // 시전자 NetworkObjectId 기록 — 만료/사망 시 체이닝 폭발에 활용
+                    owner.myData.deathMarkCasterId =
+                        (e.source != null && e.source.networkSync?.NetworkObject != null)
+                            ? e.source.networkSync.NetworkObject.NetworkObjectId
+                            : ulong.MaxValue;
                 }
                 break;
         }
@@ -219,7 +237,26 @@ public class StatusEffectSystem : MonoBehaviour
             case StatusEffectType.ShieldHp:
                 if (owner.myData != null) owner.myData.shieldHp = 0f; break;
             case StatusEffectType.DeathMarkTarget:
-                if (owner.myData != null) owner.myData.deathMarkActive = false; break;
+                if (owner.myData != null)
+                {
+                    // 낙인이 시간 만료로 소멸 — 쌓인 피해가 있으면 절반을 즉시 폭발
+                    // (대상이 살아있을 때만. 사망 시 체이닝은 SkillSystem에서 처리)
+                    if (!owner.IsDead && owner.networkSync != null && owner.networkSync.IsServer
+                        && owner.myData.deathMarkAccumulated > 0f)
+                    {
+                        owner.networkSync.TriggerDeathMarkExplosion(
+                            owner.myData.deathMarkCasterId,
+                            owner.myData.deathMarkAccumulated,
+                            isKillExplosion: false);
+                    }
+                    owner.myData.deathMarkActive       = false;
+                    owner.myData.deathMarkCasterId     = ulong.MaxValue;
+                    // [버그 수정] 만료 시 누적값 초기화 누락.
+                    // 초기화 없이 재시전하면 이전 사이클 누적 피해가 새 사이클에 합산되어
+                    // TriggerDeathMarkExplosion 보너스 피해가 의도치 않게 과중첩됨.
+                    owner.myData.deathMarkAccumulated  = 0f;
+                }
+                break;
         }
     }
 
