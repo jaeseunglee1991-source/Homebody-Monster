@@ -84,6 +84,9 @@ public class PlayerNetworkSync : NetworkBehaviour
 
     // ── 서버 전용 상태 ──────────────────────────────────────────
     private CharacterData      _serverData;
+    // [버그 수정] BanAndKick용 Supabase userId 캐시.
+    // SubmitCharacterDataServerRpc에서 클라이언트가 전달한 currentPlayerId를 저장.
+    private string             _serverUserId;
     private float              _lastAttackTime = -999f;
     private PlayerNetworkSync  _pendingKiller  = null;
     // 스킬별 마지막 사용 시각 — 악의적 클라이언트의 쿨다운 무시 RPC 반복 전송 방지
@@ -101,7 +104,9 @@ public class PlayerNetworkSync : NetworkBehaviour
     private bool _isProcessingRevive = false;
     private CancellationTokenSource _reviveCts = null;
 
-    public CharacterData ServerData => _serverData;
+    public CharacterData ServerData  => _serverData;
+    // [버그 수정] ServerValidator.BanAndKickAsync가 정확한 userId를 참조할 수 있도록 공개
+    public string        ServerUserId => _serverUserId;
 
     private PlayerController _controller;
 
@@ -140,7 +145,17 @@ public class PlayerNetworkSync : NetworkBehaviour
             string nicknameValue = GameManager.Instance?.currentPlayerNickname
                 ?? GameManager.Instance?.currentPlayerId
                 ?? $"Player_{OwnerClientId}";
-            SubmitCharacterDataServerRpc(BuildNetworkData(), new FixedString64Bytes(nicknameValue));
+            // [버그 수정] Supabase userId를 서버로 전달.
+            // 기존: ServerValidator.BanAndKickAsync에서 GameManager.currentPlayerId를 사용했는데
+            //       데디케이티드 서버의 GameManager는 자신의 계정 ID(또는 빈값)를 갖고 있어
+            //       치트 플레이어의 ID가 아닌 엉뚱한 값이 ban_logs에 기록됨.
+            // 수정: 인증된 클라이언트가 자신의 currentPlayerId를 RPC로 전달,
+            //       서버는 _serverUserId에 캐시해 BanAndKickAsync에서 정확히 사용.
+            string userIdValue = GameManager.Instance?.currentPlayerId ?? "";
+            SubmitCharacterDataServerRpc(
+                BuildNetworkData(),
+                new FixedString64Bytes(nicknameValue),
+                new FixedString64Bytes(userIdValue));
         }
 
         InGameManager.Instance?.RegisterPlayer(_controller);
@@ -213,7 +228,7 @@ public class PlayerNetworkSync : NetworkBehaviour
     // ════════════════════════════════════════════════════════════
 
     [ServerRpc]
-    private void SubmitCharacterDataServerRpc(NetworkCharacterData netData, FixedString64Bytes nickname)
+    private void SubmitCharacterDataServerRpc(NetworkCharacterData netData, FixedString64Bytes nickname, FixedString64Bytes userId = default)
     {
         // StatCalculator 이론 최댓값 기준 범위 검증 (개조 클라이언트 maxHp=9999 등 차단)
         // HP 최댓값: 50 * (1+9*0.111) * 1.4 ≈ 140, ATK 최댓값: 5.0 * 2.0 * 1.5 ≈ 15
@@ -233,6 +248,9 @@ public class PlayerNetworkSync : NetworkBehaviour
         // NetworkVariable 동기화보다 RPC가 먼저 도달하는 타이밍 버그를 해결하며,
         // 서버에서 NetworkNickname을 설정하므로 클라이언트 위변조도 차단합니다.
         _serverData.playerName = nickname.ToString();
+        // [버그 수정] 클라이언트가 전달한 Supabase userId를 서버 캐시에 저장.
+        // BanAndKickAsync에서 GameManager.currentPlayerId(서버 자신의 ID) 대신 이 값을 사용.
+        if (!userId.IsEmpty) _serverUserId = userId.ToString();
         // StatusEffectSystem(myData.shieldHp 수정)과 CombatSystem(_serverData.shieldHp 읽기)이
         // 같은 객체를 참조하도록 단일화 → IronSkin 실드, deathMark, tenacity 등 런타임 필드 일관성 보장
         _controller.SetMyData(_serverData);
@@ -429,12 +447,13 @@ public class PlayerNetworkSync : NetworkBehaviour
         if (mgr == null) return false;
         if (target._hasUsedRevive) return false;
         if (mgr.ElapsedGameTime > 60f) return false;
-        // [FIX] AliveCount 타이밍 버그.
+        // [FIX] AliveCount 타이밍 버그 + 조건식 오류 수정.
         // CanOfferRevive는 ProcessDeath에서 FinalizeDeath(→ OnPlayerDied → alivePlayers.Remove)
-        // 보다 먼저 호출되므로, 사망자가 아직 alivePlayers에 포함된 상태에서 AliveCount를 읽음.
-        // 예: 실제 생존자 2명인데 사망자 포함 3명으로 읽혀 부활을 잘못 허용.
-        // → 사망자 1명을 미리 빼서 판정해야 정확한 생존자 수가 됨.
-        if (mgr.AliveCount - 1 <= 2) return false;
+        // 보다 먼저 호출되므로 사망자가 아직 AliveCount에 포함된 상태.
+        // 부활 후 실제 생존자 수 = AliveCount - 1.
+        // 기존 <= 2: "부활 후 2명"인 경우도 거부 → 3명 매치에서 부활 불가 버그.
+        // 수정 < 3 : "부활 후 2명 미만"일 때만 거부 (2명이면 게임 계속 가능).
+        if (mgr.AliveCount < 3) return false;
         if (mgr.MatchReviveUsedCount >= InGameManager.MaxMatchReviveCount) return false;
         return true;
     }
@@ -447,7 +466,7 @@ public class PlayerNetworkSync : NetworkBehaviour
         if (mgr == null) return "InGameManager 없음";
         if (target._hasUsedRevive)                                         return "이미 부활권 사용함";
         if (mgr.ElapsedGameTime > 60f)                                     return $"시간 초과 ({mgr.ElapsedGameTime:0}초)";
-        if (mgr.AliveCount - 1 <= 2)                                       return $"생존자 {mgr.AliveCount - 1}명 (최소 3명 필요)";
+        if (mgr.AliveCount < 3)                                            return $"생존자 {mgr.AliveCount - 1}명 (부활 후 최소 2명 필요)";
         if (mgr.MatchReviveUsedCount >= InGameManager.MaxMatchReviveCount) return $"매치 부활 횟수 소진 ({mgr.MatchReviveUsedCount}/{InGameManager.MaxMatchReviveCount})";
         return "알 수 없음";
     }
@@ -495,7 +514,7 @@ public class PlayerNetworkSync : NetworkBehaviour
     {
         try
         {
-            await Task.Delay(5500, token); // 5.5초 대기 (취소 가능)
+            await Task.Delay(7000, token); // 7.0초 대기: UI 5초 + RTT 여유 2초 (취소 가능)
         }
         catch (TaskCanceledException)
         {
@@ -617,12 +636,9 @@ public class PlayerNetworkSync : NetworkBehaviour
                 Debug.LogError($"[PlayerNetworkSync] 티켓 차감 오류: {e.Message}");
             }
 
-            // [FIX] DB 차감 성공 시 로컬 캐시 즉시 갱신.
-            // 미갱신 시 InGameHUD.UpdateReviveInfoText()가 이전 수량을 표시하고,
-            // 실제 0장인데도 부활 버튼이 활성화된 채로 남는 UX 버그 발생.
-            if (success && GameManager.Instance != null)
-                GameManager.Instance.reviveTicketCount =
-                    Mathf.Max(0, GameManager.Instance.reviveTicketCount - 1);
+            // [FIX #revive-double] 로컬 캐시 이중 차감 제거.
+            // UseReviveTicket() 내부(SupabaseManager.cs)에서 성공 시 이미 -1 처리하므로
+            // 여기서 한 번 더 차감하면 부활 1회에 티켓이 2장 소모되는 버그 발생.
         }
         else
         {
@@ -752,6 +768,33 @@ public class PlayerNetworkSync : NetworkBehaviour
     {
         if (!IsServer || NetworkIsDead.Value || _serverData == null) return;
         if (damage <= 0f) return;
+
+        // [FIX] 면역(IsImmune) 상태에서 DoT 데미지가 통과하는 버그.
+        // CombatSystem.CalculateDamageWithOverride(평타/스킬 경로)는 IsImmune을 체크하지만
+        // ApplyDamageServer(DoT/자해 경로)는 체크 없이 HP를 차감함.
+        // IceShield, TenacityShield 발동 중에도 독/출혈/화상 DoT가 계속 깎이는 버그 수정.
+        if (_controller.StatusFX != null && _controller.StatusFX.IsImmune)
+        {
+            result = new DamageResult { finalDamage = 0f, isEvaded = true };
+            NotifyHitClientRpc(result);
+            return;
+        }
+
+        // [FIX] DoT 데미지(ApplyDamageServer 경로)가 실드(ShieldHp)를 무시하는 버그.
+        // CombatSystem.CalculateDamageWithOverride(평타/스킬 경로)는 AbsorbWithShield를 거치지만
+        // ApplyDamageServer는 직접 HP를 차감해 실드가 있어도 관통함.
+        // 독/출혈/화상이 IronSkin 실드를 완전 무시하는 결과 초래.
+        // → 실드가 있으면 먼저 흡수하고 남은 데미지만 HP에서 차감.
+        if (_controller.StatusFX != null && _serverData.shieldHp > 0f)
+        {
+            damage = _controller.StatusFX.AbsorbWithShield(damage);
+            result = new DamageResult { finalDamage = damage, isShielded = true };
+            if (damage <= 0f)
+            {
+                NotifyHitClientRpc(result);
+                return;
+            }
+        }
 
         float newHp = Mathf.Max(0f, NetworkHp.Value - damage);
         NetworkHp.Value       = newHp;

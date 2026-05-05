@@ -67,8 +67,9 @@ public class NetworkPingMonitor : NetworkBehaviour
     private int   _sessionPingCount = 0;
 
     private Coroutine             _pingCoroutine;
-    private CancellationTokenSource _pingCts; // [Fix-3] 코루틴 일괄 종료용
-    private CancellationTokenSource _saveCts; // [Fix-4] 저장 Task 종료용
+    private CancellationTokenSource _pingCts; // [Fix-3] 핑 측정 코루틴 즉시 종료용 — Despawn 시 취소
+    private CancellationTokenSource _saveCts; // [Fix-4] 저장 Task용 — OnDestroy에서 취소하지 않음
+    private Task                    _saveTask; // 저장 Task 참조 보관 — GC 조기 수집 방지
 
     // ════════════════════════════════════════════════════════════
     //  Unity 생명주기
@@ -109,11 +110,13 @@ public class NetworkPingMonitor : NetworkBehaviour
             _pingCoroutine = null;
         }
 
-        // [Fix-4] 새 CTS로 저장 Task 실행 (씬 전환 완료 시 취소)
+        // [Fix-4] 저장 Task: 이전 CTS 정리 후 새로 생성해 Task 시작.
+        // _saveTask 참조를 보관해 GC 조기 수집을 방지한다.
+        // OnDestroy에서는 _saveCts를 취소하지 않음 — Supabase 왕복 완료 전 취소 방지.
         _saveCts?.Cancel();
         _saveCts?.Dispose();
-        _saveCts = new CancellationTokenSource();
-        _ = SaveSessionPingAsync(_saveCts.Token);
+        _saveCts  = new CancellationTokenSource();
+        _saveTask = SaveSessionPingAsync(_saveCts.Token);
 
         if (Instance == this) Instance = null;
 
@@ -122,8 +125,13 @@ public class NetworkPingMonitor : NetworkBehaviour
 
     private new void OnDestroy()
     {
-        _pingCts?.Cancel(); _pingCts?.Dispose();
-        _saveCts?.Cancel(); _saveCts?.Dispose();
+        _pingCts?.Cancel();
+        _pingCts?.Dispose();
+        _pingCts = null;
+        // _saveCts는 여기서 취소하지 않음.
+        // OnNetworkDespawn에서 시작한 SaveSessionPingAsync가 Supabase 왕복(수백ms)
+        // 완료 전에 취소되면 세션 핑 데이터가 DB에 저장되지 않는 버그 발생.
+        // Task 완료 후 _saveCts / _saveTask는 GC가 자연 수집한다.
     }
 
     // ════════════════════════════════════════════════════════════

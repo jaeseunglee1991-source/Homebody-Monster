@@ -52,6 +52,12 @@ public class NetworkRoomManager : MonoBehaviour
     public Transform  memberListContent;
     public GameObject memberRowPrefab;
 
+    [Header("데디케이티드 서버 설정")]
+    [Tooltip("커맨드라인 -serverIp 또는 GAME_SERVER_IP 환경변수로 재정의됩니다.")]
+    public string serverIpFallback   = "127.0.0.1";
+    [Tooltip("커맨드라인 -port 또는 GAME_SERVER_PORT 환경변수로 재정의됩니다.")]
+    public ushort serverPortFallback = AppNetworkManager.DefaultPort;
+
     // ── 내부 상태 ──────────────────────────────────────────────
     private string _currentRoomId   = null;
     private string _currentRoomCode = null;
@@ -288,10 +294,12 @@ public class NetworkRoomManager : MonoBehaviour
 
         ShowStatus("게임 시작 중...");
 
-        string serverIp   = GameManager.Instance?.gameServerIp ?? "127.0.0.1";
-        ushort serverPort = (GameManager.Instance?.gameServerPort > 0)
-                           ? GameManager.Instance.gameServerPort
-                           : AppNetworkManager.DefaultPort;
+        // [버그 수정] 프라이빗룸 방장이 게임 시작 시 서버 IP가 항상 127.0.0.1이 되는 버그.
+        // GameManager.gameServerIp는 MatchmakingManager 또는 ConnectToGameServer 완료 후 세팅되므로
+        // 프라이빗룸 첫 시작 시점에는 null → "127.0.0.1" 폴백 → 모든 클라이언트 루프백 접속 실패.
+        // MatchmakingManager와 동일하게 커맨드라인 → 환경변수 → Inspector 폴백 순서로 결정.
+        string serverIp   = GetResolvedServerIp();
+        ushort serverPort = GetResolvedServerPort();
         string endpoint   = $"{serverIp}:{serverPort}";
 
         bool ok = await SupabaseManager.Instance.StartPrivateRoom(_currentRoomId, endpoint);
@@ -303,6 +311,35 @@ public class NetworkRoomManager : MonoBehaviour
         }
 
         ConnectToGameServer(serverIp, serverPort);
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  서버 IP/Port 결정 — MatchmakingManager와 동일한 우선순위 적용
+    //  커맨드라인 > 환경변수 > Inspector 폴백
+    // ════════════════════════════════════════════════════════════
+
+    private string GetResolvedServerIp()
+    {
+        string[] args = System.Environment.GetCommandLineArgs();
+        for (int i = 0; i < args.Length - 1; i++)
+            if (args[i] == "-serverIp") return args[i + 1];
+
+        string env = System.Environment.GetEnvironmentVariable("GAME_SERVER_IP");
+        if (!string.IsNullOrEmpty(env)) return env;
+
+        return serverIpFallback;
+    }
+
+    private ushort GetResolvedServerPort()
+    {
+        string[] args = System.Environment.GetCommandLineArgs();
+        for (int i = 0; i < args.Length - 1; i++)
+            if (args[i] == "-port" && ushort.TryParse(args[i + 1], out ushort p)) return p;
+
+        string env = System.Environment.GetEnvironmentVariable("GAME_SERVER_PORT");
+        if (!string.IsNullOrEmpty(env) && ushort.TryParse(env, out ushort ep)) return ep;
+
+        return serverPortFallback;
     }
 
     // ════════════════════════════════════════════════════════════

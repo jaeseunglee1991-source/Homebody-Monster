@@ -23,6 +23,15 @@ public class UserProfile : Supabase.Postgrest.Models.BaseModel
     [JsonProperty("pizza_count")]         public int    PizzaCount        { get; set; }
     [Supabase.Postgrest.Attributes.Column("revive_ticket_count")]
     [JsonProperty("revive_ticket_count")] public int    ReviveTicketCount { get; set; }
+
+    [Supabase.Postgrest.Attributes.Column("tutorial_done")]
+    [JsonProperty("tutorial_done")]       public bool   TutorialDone      { get; set; }
+
+    [Supabase.Postgrest.Attributes.Column("fcm_token")]
+    [JsonProperty("fcm_token")]           public string FcmToken          { get; set; }
+
+    [Supabase.Postgrest.Attributes.Column("last_login_at")]
+    [JsonProperty("last_login_at")]       public string LastLoginAt        { get; set; }
 }
 
 /// <summary>
@@ -467,29 +476,32 @@ public partial class SupabaseManager : MonoBehaviour
 
         try
         {
-            _lobbyChatChannel = Client.Realtime.Channel("lobby-chat");
-
-            // Broadcast 이벤트 리스너 등록
-            var broadcast = _lobbyChatChannel.Register<LobbyChatBroadcast>();
-            broadcast.AddBroadcastEventHandler((sender, payload) =>
+            if (_lobbyChatChannel == null)
             {
-                var typed = payload as LobbyChatBroadcast;
-                MainThreadDispatcher.Enqueue(() =>
+                _lobbyChatChannel = Client.Realtime.Channel("lobby-chat");
+
+                // Broadcast 이벤트 리스너 등록
+                var broadcast = _lobbyChatChannel.Register<LobbyChatBroadcast>();
+                broadcast.AddBroadcastEventHandler((sender, payload) =>
                 {
-                    string nick = typed?.Payload?.Nickname ?? "???";
-                    string msg  = typed?.Payload?.Message  ?? "";
-                    OnLobbyChatReceived?.Invoke(nick, msg);
+                    var typed = payload as LobbyChatBroadcast;
+                    MainThreadDispatcher.Enqueue(() =>
+                    {
+                        string nick = typed?.Payload?.Nickname ?? "???";
+                        string msg  = typed?.Payload?.Message  ?? "";
+                        OnLobbyChatReceived?.Invoke(nick, msg);
+                    });
                 });
-            });
 
-            // Presence 등록 — Subscribe 전에 Register 해야 함
-            string presenceKey = GameManager.Instance?.currentPlayerId ?? System.Guid.NewGuid().ToString();
-            _lobbyPresence = _lobbyChatChannel.Register<LobbyPresence>(presenceKey);
+                // Presence 등록 — Subscribe 전에 Register 해야 함
+                string presenceKey = GameManager.Instance?.currentPlayerId ?? System.Guid.NewGuid().ToString();
+                _lobbyPresence = _lobbyChatChannel.Register<LobbyPresence>(presenceKey);
 
-            // Presence 이벤트 핸들러 (Sync/Join/Leave 모두 감지)
-            _lobbyPresence.AddPresenceEventHandler(Supabase.Realtime.Interfaces.IRealtimePresence.EventType.Sync, OnPresenceEvent);
-            _lobbyPresence.AddPresenceEventHandler(Supabase.Realtime.Interfaces.IRealtimePresence.EventType.Join, OnPresenceEvent);
-            _lobbyPresence.AddPresenceEventHandler(Supabase.Realtime.Interfaces.IRealtimePresence.EventType.Leave, OnPresenceEvent);
+                // Presence 이벤트 핸들러 (Sync/Join/Leave 모두 감지)
+                _lobbyPresence.AddPresenceEventHandler(Supabase.Realtime.Interfaces.IRealtimePresence.EventType.Sync, OnPresenceEvent);
+                _lobbyPresence.AddPresenceEventHandler(Supabase.Realtime.Interfaces.IRealtimePresence.EventType.Join, OnPresenceEvent);
+                _lobbyPresence.AddPresenceEventHandler(Supabase.Realtime.Interfaces.IRealtimePresence.EventType.Leave, OnPresenceEvent);
+            }
 
             await _lobbyChatChannel.Subscribe();
             _isLobbyChannelSubscribed = true;
@@ -521,8 +533,8 @@ public partial class SupabaseManager : MonoBehaviour
         }
         finally
         {
-            _lobbyChatChannel = null;
-            _lobbyPresence = null;
+            // _lobbyChatChannel = null; // 재사용을 위해 null로 초기화하지 않음
+            // _lobbyPresence = null;
             _isLobbyChannelSubscribed = false;
         }
         return Task.CompletedTask;
@@ -535,6 +547,7 @@ public partial class SupabaseManager : MonoBehaviour
     /// <returns>전송 성공 여부</returns>
     public async Task<bool> SendLobbyChatMessage(string nickname, string message)
     {
+        await Task.CompletedTask; // CS1998 경고(await 없음) 방지용
         if (!_isLobbyChannelSubscribed || _lobbyChatChannel == null)
         {
             Debug.LogWarning("[Supabase] 채팅 전송 실패 — 채널 미구독");

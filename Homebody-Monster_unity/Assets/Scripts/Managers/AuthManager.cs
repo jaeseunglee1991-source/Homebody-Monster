@@ -241,7 +241,8 @@ public class AuthManager : MonoBehaviour
             else
             {
                 Debug.Log("[Auth] Valid profile found. Entering lobby.");
-                EnterLobby(uid, profile.Nickname);
+                // [버그 수정] ReviveTicketCount를 함께 전달
+                EnterLobby(uid, profile.Nickname, profile.ReviveTicketCount);
             }
         }
         catch (System.Exception e)
@@ -322,7 +323,8 @@ public class AuthManager : MonoBehaviour
             }
 
             Debug.Log($"[Auth] 닉네임 설정 완료: {newName}");
-            EnterLobby(uid, newName);
+            // 신규 가입 최초 닉네임 설정 경로 — 부활권 0장이 정상값
+            EnterLobby(uid, newName, reviveTicketCount: 0);
         }
         catch (System.Exception e)
         {
@@ -409,13 +411,20 @@ public class AuthManager : MonoBehaviour
         if (errorText != null) errorText.text = "";
     }
 
-    private void EnterLobby(string uid, string nickname)
+    /// <summary>
+    /// [버그 수정] EnterLobby에서 reviveTicketCount 미세팅 버그.
+    /// 기존 코드는 uid·nickname만 GameManager에 저장하고
+    /// profile.ReviveTicketCount를 반영하지 않아 로비 진입 후 항상 0으로 시작.
+    /// → 인게임 부활 버튼 비활성화 + 기존 보유 티켓 사용 불가.
+    /// </summary>
+    private void EnterLobby(string uid, string nickname, int reviveTicketCount = 0)
     {
         if (GameManager.Instance != null)
         {
-            Debug.Log($"[Auth] 로비 진입 — UID: {uid}, 닉네임: {nickname}");
-            GameManager.Instance.currentPlayerId = uid;
+            Debug.Log($"[Auth] 로비 진입 — UID: {uid}, 닉네임: {nickname}, 부활권: {reviveTicketCount}장");
+            GameManager.Instance.currentPlayerId       = uid;
             GameManager.Instance.currentPlayerNickname = nickname;
+            GameManager.Instance.reviveTicketCount     = reviveTicketCount;
             GameManager.Instance.LoadScene("LobbyScene");
         }
         else

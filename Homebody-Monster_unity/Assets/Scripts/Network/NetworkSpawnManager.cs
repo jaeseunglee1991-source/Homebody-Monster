@@ -46,12 +46,14 @@ public class NetworkSpawnManager : NetworkBehaviour
 
     private void Awake()
     {
+        Debug.Log("[NetworkSpawnManager] Awake 호출됨");
         if (Instance == null) Instance = this;
         else { Destroy(gameObject); return; }
     }
 
     public override void OnNetworkSpawn()
     {
+        Debug.Log($"[NetworkSpawnManager] OnNetworkSpawn 호출됨 (IsServer: {IsServer})");
         if (!IsServer) return;
 
         NetworkManager.Singleton.OnClientConnectedCallback  += HandleClientConnected;
@@ -94,6 +96,13 @@ public class NetworkSpawnManager : NetworkBehaviour
     private void HandleClientConnected(ulong clientId)
     {
         if (!IsServer) return;
+
+        // [FIX] 데디케이티드 서버가 자기 자신(서버)을 위해 플레이어를 스폰하는 버그 방지
+        if (clientId == Unity.Netcode.NetworkManager.ServerClientId && !Unity.Netcode.NetworkManager.Singleton.IsHost)
+        {
+            Debug.Log("[NetworkSpawnManager] 데디케이티드 서버 본인 접속 감지 -> 플레이어 스폰 생략");
+            return;
+        }
 
         // [Fix #3] 게임 시작 후 접속한 클라이언트는 스폰하지 않고 즉시 연결 차단
         if (_gameStarted)
@@ -166,7 +175,7 @@ public class NetworkSpawnManager : NetworkBehaviour
         Debug.Log($"[NetworkSpawnManager] 🎮 플레이어 스폰: clientId={clientId}, pos={spawnPos}");
     }
 
-    private Vector3 GetNextSpawnPoint()
+    public Vector3 GetNextSpawnPoint()
     {
         if (spawnPoints == null || spawnPoints.Length == 0) return Vector3.zero;
 

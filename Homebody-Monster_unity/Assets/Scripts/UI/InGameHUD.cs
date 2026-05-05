@@ -89,6 +89,30 @@ public class InGameHUD : MonoBehaviour
         if (endBannerPanel != null) endBannerPanel.SetActive(false);
         if (revivePanel    != null) revivePanel.SetActive(false);
         if (killFeedText   != null) killFeedText.text = "";
+
+        if (timerText == null)
+        {
+            var tmpList = GetComponentsInChildren<TextMeshProUGUI>(true);
+            foreach (var t in tmpList) if (t.gameObject.name == "TimerText") { timerText = t; break; }
+        }
+        
+        // [FIX] 초기 텍스트가 "TimerText"로 남아있지 않도록 초기화
+        if (timerText != null) timerText.text = "00:00";
+        if (survivorCountText == null)
+        {
+            var tmpList = GetComponentsInChildren<TextMeshProUGUI>(true);
+            foreach (var t in tmpList) if (t.gameObject.name == "SurvivorCountText") { survivorCountText = t; break; }
+        }
+        Debug.Log("InGameHUD Initialized.");
+    }
+
+    private void Start()
+    {
+        // [FIX] OnNetworkSpawn이 Awake보다 먼저 실행될 경우 RefreshHUD가 누락되는 문제 방지
+        if (InGameManager.Instance != null)
+        {
+            UpdateSurvivorCount(InGameManager.Instance.AliveCount, InGameManager.Instance.maxPlayers);
+        }
     }
 
     public void InitPlayerUI(PlayerController player)
@@ -332,7 +356,25 @@ public class InGameHUD : MonoBehaviour
         // Supabase에서 캐시된 보유 티켓 수량
         int ownedTickets   = GameManager.Instance != null ? GameManager.Instance.reviveTicketCount : 0;
 
-        // 제한 사유 우선 표시
+        // ── 부활 가능 여부 판정 ────────────────────────────────────────
+        // [버그 수정 1] reviveButton.interactable 미제어 버그.
+        // 기존 코드는 안내 텍스트만 바꾸고 버튼 활성 상태를 제어하지 않아
+        // 티켓 없음·시간 초과·생존자 부족 조건에서도 버튼이 항상 눌렸음.
+        //
+        // [버그 수정 2] survivors <= 2 → survivors < 3.
+        // CanOfferRevive(AliveCount < 3)와 동일 기준으로 맞춤.
+        // survivors(=AliveCount)에는 사망자가 아직 포함되므로
+        // survivors < 3 이면 부활 후 실제 생존자 1명 이하 → 거부.
+        bool canRevive =
+            ownedTickets > 0  &&
+            timeLeft     > 0f &&
+            survivors    >= 3 &&
+            remaining    > 0;
+
+        if (reviveButton != null)
+            reviveButton.interactable = canRevive;
+
+        // ── 안내 텍스트 — 거부 사유 우선 표시 ─────────────────────────
         if (ownedTickets <= 0)
         {
             reviveInfoText.text = "보유한 즉시부활권이 없습니다.\n(로비에서 피자 또는 광고로 획득 가능)";
@@ -341,9 +383,10 @@ public class InGameHUD : MonoBehaviour
         {
             reviveInfoText.text = "게임 시작 60초가 지나 부활권을 사용할 수 없습니다.";
         }
-        else if (survivors <= 2)
+        else if (survivors < 3)
         {
-            reviveInfoText.text = $"생존자가 {survivors}명이라 부활권을 사용할 수 없습니다.\n(최소 3명 이상이어야 사용 가능)";
+            // survivors - 1 = 사망자를 뺀 실제 체감 생존자 수
+            reviveInfoText.text = $"생존자가 {survivors - 1}명이라 부활권을 사용할 수 없습니다.\n(부활 후 최소 2명 이상이어야 사용 가능)";
         }
         else if (remaining <= 0)
         {

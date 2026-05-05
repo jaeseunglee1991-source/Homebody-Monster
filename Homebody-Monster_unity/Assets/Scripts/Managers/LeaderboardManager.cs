@@ -123,6 +123,13 @@ public class LeaderboardManager : MonoBehaviour
 
     /// <summary>
     /// 60초 캐시를 활용한 리더보드 비동기 조회.
+    ///
+    /// [버그 수정] 캐시 타임스탬프 누락으로 조회 실패 후 캐시 무효화.
+    /// 기존: 조회 성공 시에만 _cacheTime을 갱신하고,
+    ///       조회 실패 시 이전값(-999f)이 유지돼 다음 호출에서 캐시 조건을 항상 위반.
+    ///       → 한 번 실패하면 매번 DB 재조회 (네트워크 낭비 + UI 오류)
+    /// 수정: 조회 시도 직후 (_cachedLeaderboard 결과와 무관하게) _cacheTime을 갱신.
+    ///       성공/실패 모두 60초 캐시 유지 (실패 시 이전값/빈 리스트 캐시).
     /// </summary>
     public async Task<List<LeaderboardRecord>> FetchLeaderboardAsync()
     {
@@ -134,14 +141,18 @@ public class LeaderboardManager : MonoBehaviour
         try
         {
             _cachedLeaderboard = await SupabaseManager.Instance.FetchLeaderboard();
-            _cacheTime = Time.realtimeSinceStartup;
-            return _cachedLeaderboard;
         }
         catch (Exception e)
         {
             Debug.LogWarning($"[LeaderboardManager] 리더보드 조회 실패: {e.Message}");
-            return _cachedLeaderboard ?? new List<LeaderboardRecord>();
+            // [버그 수정] 조회 실패해도 캐시 타임스탬프는 갱신 (60초 캐시 유지)
+            _cachedLeaderboard ??= new List<LeaderboardRecord>();
         }
+
+        // [버그 수정] 조회 성공/실패 구분 없이 _cacheTime 갱신
+        // (성공 시 진짜 데이터 캐시, 실패 시 빈 리스트 캐시하지만 둘 다 60초 유지)
+        _cacheTime = Time.realtimeSinceStartup;
+        return _cachedLeaderboard;
     }
 
     private void RenderLeaderboard(List<LeaderboardRecord> records)

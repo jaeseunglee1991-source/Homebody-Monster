@@ -112,6 +112,18 @@ public class ReconnectManager : MonoBehaviour
             if (progressSlider != null)
                 progressSlider.value = (float)(attempt - 1) / maxRetries;
 
+            // [버그 수정] 매 시도 전 이전 NGO 연결 상태를 Shutdown으로 정리.
+            // 기존 코드는 NetworkManager.StartClient()를 Shutdown 없이 바로 재호출.
+            // NGO는 내부 상태가 Connecting이거나 이전 세션이 남아있으면
+            // StartClient()를 거부(false 반환)하므로 2번째 시도부터 항상 실패.
+            // Shutdown() 후 1프레임 대기하여 NGO 내부 정리를 보장한 뒤 재시도.
+            var netMgrPre = Unity.Netcode.NetworkManager.Singleton;
+            if (netMgrPre != null && (netMgrPre.IsClient || netMgrPre.IsConnectedClient))
+            {
+                netMgrPre.Shutdown();
+                yield return null; // NGO Shutdown 1프레임 대기
+            }
+
             // 재접속 시도
             if (AppNetworkManager.Instance != null)
                 AppNetworkManager.Instance.ConnectToGameServer(_lastIp, _lastPort);

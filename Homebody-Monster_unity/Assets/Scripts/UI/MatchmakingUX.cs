@@ -49,6 +49,11 @@ public class MatchmakingUX : MonoBehaviour
     // ── 내부 상태 ────────────────────────────────────────────────
     private Coroutine _uxCoroutine;
     private bool      _matchFound;
+    // [버그 수정] OnMatchFound에서 받은 접속 정보를 카운트다운 후 사용하기 위해 캐시.
+    // MatchmakingManager.HandleMatchSuccess가 MatchmakingUX 존재 시 ConnectToGameServer를
+    // 호출하지 않으므로 카운트다운 종료 시 여기서 직접 호출해야 함.
+    private string    _pendingIp   = null;
+    private ushort    _pendingPort = AppNetworkManager.DefaultPort;
     // 이벤트 구독 해제용 캐시 (람다 재사용)
     private System.Action _onMatchFailedDelegate;
 
@@ -112,11 +117,19 @@ public class MatchmakingUX : MonoBehaviour
 
     /// <summary>
     /// 매칭 성공 이벤트 핸들러 (MatchmakingManager.OnMatchFound).
-    /// ip/port는 MatchmakingManager가 이미 GameManager에 저장하므로 여기서는 UX만 처리합니다.
+    /// ip/port를 캐시해두고 카운트다운 후 ConnectToGameServer를 호출합니다.
+    ///
+    /// [버그 수정] ConnectToGameServer 호출 누락.
+    /// MatchmakingManager.HandleMatchSuccess의 폴백 조건
+    ///   (FindAnyObjectByType&lt;MatchmakingUX&gt;() == null)이
+    /// MatchmakingUX 존재 시 false가 되어 ConnectToGameServer가 호출되지 않았음.
+    /// MatchFoundCountdown 종료 시 여기서 직접 호출하도록 수정.
     /// </summary>
     public void OnMatchFound(string ip, ushort port)
     {
-        _matchFound = true;
+        _matchFound  = true;
+        _pendingIp   = ip;
+        _pendingPort = port;
         if (_uxCoroutine != null) { StopCoroutine(_uxCoroutine); _uxCoroutine = null; }
         StartCoroutine(MatchFoundCountdown());
     }
@@ -183,6 +196,22 @@ public class MatchmakingUX : MonoBehaviour
             yield return new WaitForSeconds(1f);
         }
         countdownPanel?.SetActive(false);
+
+        // [버그 수정] 카운트다운 종료 후 게임 서버 접속 호출.
+        // MatchmakingManager.HandleMatchSuccess의 폴백 조건이 MatchmakingUX 존재 시
+        // ConnectToGameServer를 건너뛰므로, 여기서 직접 호출해야 함.
+        // _pendingIp가 null이면 HandleMatchSuccess가 이미 저장한 GameManager 캐시로 복구.
+        string ip   = !string.IsNullOrEmpty(_pendingIp)
+                        ? _pendingIp
+                        : GameManager.Instance?.gameServerIp;
+        ushort port = _pendingPort != 0
+                        ? _pendingPort
+                        : (GameManager.Instance?.gameServerPort ?? AppNetworkManager.DefaultPort);
+
+        if (!string.IsNullOrEmpty(ip))
+            AppNetworkManager.Instance?.ConnectToGameServer(ip, port);
+        else
+            Debug.LogError("[MatchmakingUX] 게임 서버 IP를 알 수 없어 접속 불가.");
     }
 
     // ════════════════════════════════════════════════════════════

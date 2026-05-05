@@ -464,7 +464,16 @@ public class MatchmakingManager : MonoBehaviour
         {
             realtimeChannel = SupabaseManager.Instance.Client.Realtime.Channel("matchmaking_queue");
 
-            realtimeChannel.Register(new PostgresChangesOptions("public", "matchmaking_queue"));
+            // [FIX] Realtime 구독 필터 누락 버그.
+            // 필터 없이 전체 테이블을 구독하면 동시 접속자 N명의 이벤트를 모두 수신 (O(N²) 트래픽).
+            // player_id 필터로 본인 행의 변경사항만 수신하도록 제한.
+            // 전제조건: matchmaking_queue 테이블이 REPLICA IDENTITY FULL이어야
+            //           UPDATE/DELETE 이벤트에서도 서버 사이드 필터가 동작합니다. (마이그레이션 적용 완료)
+            realtimeChannel.Register(new PostgresChangesOptions(
+                "public",
+                "matchmaking_queue",
+                filter: $"player_id=eq.{myPlayerId}"
+            ));
             realtimeChannel.AddPostgresChangeHandler(ListenType.Inserts,
                 (_, c) => MainThreadDispatcher.Enqueue(() => OnQueueInsert(c)));
             realtimeChannel.AddPostgresChangeHandler(ListenType.Updates,

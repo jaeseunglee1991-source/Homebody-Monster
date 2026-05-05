@@ -57,8 +57,9 @@ public class PlayerController : NetworkBehaviour
     private PlayerController targetEnemy;
     private float            lastAttackTime = -999f;
     private bool             isChasing      = false;
-    private bool             movementLocked = false;
-    private bool             attackLocked   = false;
+    private bool             movementLocked = true;
+    // [FIX] 초기 상태를 잠금(true)으로 변경. InGameManager에서 게임 시작 시 명시적으로 풀어주기 전까지 이동 불가.
+    private bool             attackLocked   = true;
     private static Camera    mainCam;
 
     // ════════════════════════════════════════════════════════════
@@ -145,6 +146,18 @@ public class PlayerController : NetworkBehaviour
         }
 
         float spd = StatCalculator.GetEffectiveMoveSpeed(myData, StatusFX);
+        // [버그 수정] 이동 처리에도 IsStealthy 체크 추가 (ChaseAndAttack과 동일 패턴).
+        // ChaseAndAttack 코루틴이 yield return null 직후 체크하기 전에
+        // FixedUpdate가 먼저 실행되어 은신 적 방향으로 1프레임 이동하는 것을 방지.
+        bool targetBecameStealthy = targetEnemy != null
+            && targetEnemy.StatusFX != null
+            && targetEnemy.StatusFX.IsStealthy;
+        if (targetBecameStealthy)
+        {
+            isChasing   = false;
+            targetEnemy = null;
+        }
+
         if (isChasing && targetEnemy != null && !targetEnemy.IsDead)
         {
             Vector2 dir = ((Vector2)targetEnemy.transform.position - Rb.position).normalized;
@@ -162,7 +175,11 @@ public class PlayerController : NetworkBehaviour
 
     private void HandleJoystickInput()
     {
+        if (movementJoystick == null)
+            movementJoystick = FindFirstObjectByType<VariableJoystick>();
+            
         if (movementJoystick == null) return;
+        
         moveDir.x = movementJoystick.Horizontal;
         moveDir.y = movementJoystick.Vertical;
         if (moveDir.sqrMagnitude > 0.01f) { isChasing = false; targetEnemy = null; }
@@ -225,8 +242,22 @@ public class PlayerController : NetworkBehaviour
 
     private IEnumerator ChaseAndAttack(PlayerController enemy)
     {
+        // [버그 수정] 은신(IsStealthy) 체크 누락.
+        // 기존 코드는 !enemy.IsDead만 체크하므로,
+        // 추적 도중 타겟이 은신 스킬을 발동해도 추격이 멈추지 않음.
+        // PlayerVisibility.SetVisible(false)로 레이어는 IgnorePointer로 바뀌지만
+        // isChasing 플래그는 true 유지 → 은신 후에도 사거리 도달 즉시 공격.
+        // 수정: IsStealthy 상태 변경 시 추적 중단.
         while (enemy != null && !enemy.IsDead && isChasing)
         {
+            // 은신 발동 시 추적 중단
+            if (enemy.StatusFX != null && enemy.StatusFX.IsStealthy)
+            {
+                isChasing  = false;
+                targetEnemy = null;
+                yield break;
+            }
+
             if (Vector2.Distance(transform.position, enemy.transform.position) <= attackRange)
             {
                 isChasing = false;
@@ -417,6 +448,18 @@ public class PlayerController : NetworkBehaviour
         attackLocked   = false;
         isChasing      = false;
         targetEnemy    = null;
+
+        // [버그 수정] 부활 시 스폰 위치 리셋 누락.
+        // 기존 코드는 부활 후에도 사망 직전 위치에 머물게 됨.
+        // 부활자가 다른 플레이어들과 멀리 떨어진 위치에 갇혀 불리한 상황이 됨.
+        // NetworkSpawnManager의 SpawnPlayer 처리 경로를 따라
+        // 랜덤 스폰 위치로 이동시켜야 함.
+        if (networkSync != null && Rb != null)
+        {
+            Vector2 spawnPos = NetworkSpawnManager.Instance?.GetNextSpawnPoint() ?? Vector2.zero;
+            if (spawnPos != Vector2.zero)
+                Rb.position = spawnPos;
+        }
 
         if (animator != null)
         {

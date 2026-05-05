@@ -75,11 +75,33 @@ public class InGameManager : MonoBehaviour
 
     private void Start()
     {
+        // [FIX] NGO 씬 로드 시 NetworkObject가 InGameManager(일반 객체)보다 먼저 스폰되거나, 
+        // 반대로 살짝 늦게 스폰되는 타이밍 이슈를 방어하기 위해 지연 등록 루틴 실행
+        StartCoroutine(DelayedInitialRegistration());
+
         // 게임 시작 카운트다운은 서버가 단독으로 주도합니다.
         // 순수 클라이언트는 NetworkSpawnManager.NotifyGameStartedClientRpc 수신 후 시작 상태로 전환됩니다.
         var netMgr = Unity.Netcode.NetworkManager.Singleton;
-        if (netMgr != null && netMgr.IsListening && !netMgr.IsServer) return;
+        
+        // [FIX] IsListening 조건 제거: 씬 로드 타이밍에 따라 IsListening이 false일 때 클라이언트가 서버 코루틴을 실행하는 버그 방지
+        if (netMgr != null && !netMgr.IsServer) return;
+        
         StartCoroutine(GameStartSequence());
+    }
+
+    private IEnumerator DelayedInitialRegistration()
+    {
+        // 씬 로드 직후부터 약 2초간 반복적으로 플레이어를 찾아 등록 시도 (스폰 타이밍 이슈 방어)
+        float elapsed = 0f;
+        while (elapsed < 2f)
+        {
+            foreach (var player in FindObjectsByType<PlayerController>(FindObjectsSortMode.None))
+            {
+                RegisterPlayer(player);
+            }
+            yield return new WaitForSeconds(0.5f);
+            elapsed += 0.5f;
+        }
     }
 
     // NetworkManager.ServerTime 기반 시간 (단일/멀티 공통 사용)
@@ -115,6 +137,8 @@ public class InGameManager : MonoBehaviour
     {
         if (player == null || alivePlayers.Contains(player)) return;
         alivePlayers.Add(player);
+
+        Debug.Log($"[InGameManager] 플레이어 등록 완료: {player.OwnerClientId} (현재 생존: {alivePlayers.Count}명)");
 
         if (!isGameActive)
         {
@@ -278,13 +302,18 @@ public class InGameManager : MonoBehaviour
         }
 
         // ── 모든 클라이언트에 서버 기준 시작 시간 전달 ──────────────
-        if (NetworkSpawnManager.Instance != null)
-            NetworkSpawnManager.Instance.NotifyGameStartedClientRpc(gameStartTime);
+        var spawnMgr = NetworkSpawnManager.Instance;
+        if (spawnMgr == null) spawnMgr = FindFirstObjectByType<NetworkSpawnManager>();
+
+        if (spawnMgr != null)
+            spawnMgr.NotifyGameStartedClientRpc(gameStartTime);
+        else
+            Debug.LogError("[InGameManager] NetworkSpawnManager를 찾을 수 없어 클라이언트에 시작 신호를 보낼 수 없습니다!");
 
         yield return new WaitForSeconds(1f);
 
-        if (NetworkSpawnManager.Instance != null)
-            NetworkSpawnManager.Instance.HideCountdownClientRpc();
+        if (spawnMgr != null)
+            spawnMgr.HideCountdownClientRpc();
         else
             HideStatusMessage();
 
@@ -298,6 +327,7 @@ public class InGameManager : MonoBehaviour
     /// </summary>
     public void ClientReceiveGameStart(float serverStartTime)
     {
+        Debug.Log($"[InGameManager] 클라이언트 게임 시작 신호 수신 (서버 시간: {serverStartTime})");
         // listen-server 호스트는 GameStartSequence에서 이미 처리했으므로 건너뜀
         var netMgr = Unity.Netcode.NetworkManager.Singleton;
         if (netMgr != null && netMgr.IsServer) return;
@@ -318,13 +348,17 @@ public class InGameManager : MonoBehaviour
         }
     }
 
-    /// <summary>멀티: NetworkSpawnManager ClientRpc, 오프라인 폴백: 로컬 HUD 직접 출력</summary>
+    /// <summary>멀티: NetworkSpawnManager ClientRpc, 오프라인/서버: 로컬 HUD 직접 출력</summary>
     private void BroadcastOrShowMessage(string message)
     {
-        if (NetworkSpawnManager.Instance != null)
-            NetworkSpawnManager.Instance.ShowCountdownClientRpc(message);
-        else
-            ShowStatusMessage(message);
+        var spawnMgr = NetworkSpawnManager.Instance;
+        if (spawnMgr == null) spawnMgr = FindFirstObjectByType<NetworkSpawnManager>();
+
+        if (spawnMgr != null)
+            spawnMgr.ShowCountdownClientRpc(message);
+        
+        // [FIX] 서버(데디케이티드 서버 포함)에서도 모니터링을 위해 화면에 메시지 출력
+        ShowStatusMessage(message);
     }
 
     private void ShowStatusMessage(string message)

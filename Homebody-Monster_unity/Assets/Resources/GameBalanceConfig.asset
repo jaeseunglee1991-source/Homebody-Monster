@@ -1,0 +1,61 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a596ab5c203dc564ebe83ab823b0582b, type: 3}
+  m_Name: GameBalanceConfig
+  m_EditorClassIdentifier: Assembly-CSharp::GameBalanceConfig
+  BaseHpMin: 20
+  BaseHpMax: 50
+  BaseAtkMin: 2
+  BaseAtkMax: 5
+  GradeMultiplierStep: 0.111
+  AffinityAdvantageMultiplier: 1.5
+  SpecialAffinityMultiplier: 2
+  StealthFirstHitMultiplier: 1.5
+  LuckyStrikeChance: 0.1
+  LuckyStrikeMultiplier: 1.5
+  NinjaEvadeChance: 0.15
+  LifestealRate: 0.2
+  LifestealMin: 0.5
+  ThornsReflectRate: 0.1
+  ThornsReflectMin: 0.5
+  GiantKillerBonusPerTen: 0.05
+  ExecutionerHpThreshold: 0.25
+  ExecutionerMultiplier: 1.3
+  GuardianHpThreshold: 0.3
+  GuardianDamageReduction: 0.2
+  DefenseStanceDamageReduction: 0.5
+  RegenerationCooldown: 4
+  RegenerationTickInterval: 2
+  RegenerationHpRate: 0.05
+  RegenerationMin: 1.5
+  ReviveTimeLimit: 60
+  ReviveDecisionTimeout: 30
+  ReviveHpRatio: 0.5
+  ReviveMaxPerMatch: 3
+  AntiCheat_MaxSpeed: 12
+  AntiCheat_TeleportThreshold: 8
+  AntiCheat_MaxDamageMultiplier: 5
+  AntiCheat_KickThreshold: 5
+  Matchmaking_MaxPlayers: 8
+  Matchmaking_MinPlayers: 2
+  Matchmaking_MaxWaitSecs: 60
+  Matchmaking_SceneLoadDelaySecs: 3
+  Reward_Rank1Pizza: 100
+  Reward_Rank2Pizza: 60
+  Reward_Rank3to4Pizza: 40
+  Reward_RankOtherPizza: 20
+  Reward_PizzaPerKill: 5
+  Reward_AdDailyPizza: 20
+  SkillCooldownOverrides: []
+  FogOfWar_ViewRadius: 8
+  FogOfWar_UpdateInterval: 0.1
+  ShopProducts: []

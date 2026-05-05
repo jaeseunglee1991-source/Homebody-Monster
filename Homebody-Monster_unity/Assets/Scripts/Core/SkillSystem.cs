@@ -74,7 +74,7 @@ public static class SkillSystem
             // ── 전사 ──────────────────────────────────────────────
             case ActiveSkillType.Sweep:
                 foreach (var t in GetEnemiesInCone(caster, 2.2f, 120f, serverFacing))
-                    DealSkillDamageServer(caster, t, cData.baseAtk * 1.2f);
+                    if (!DealSkillDamageServer(caster, t, cData.baseAtk * 1.2f)) break; // [버그 수정] Thorns 반사로 caster 사망 → AoE 루프 중단
                 yield break;
 
             case ActiveSkillType.ChargeStrike:
@@ -92,7 +92,8 @@ public static class SkillSystem
                 {
                     var t = h.collider.GetComponent<PlayerController>();
                     if (t == null || t.IsDead || t == caster || t.networkSync == null) continue;
-                    DealSkillDamageServer(caster, t, cData.baseAtk * 1.5f);
+                    if (!DealSkillDamageServer(caster, t, cData.baseAtk * 1.5f))
+                        break; // [버그 수정] Thorns 반사로 caster 사망 → AoE 루프 중단
                     t.networkSync.ApplyStatusEffectServer(StatusEffectType.Stun, 0.5f, 0f, caster.networkSync);
                 }
                 yield break;
@@ -107,7 +108,8 @@ public static class SkillSystem
                 if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
                 foreach (var t in GetEnemiesInRadius(caster, 3.5f))
                 {
-                    DealSkillDamageServer(caster, t, cData.baseAtk * 2.0f);
+                    if (!DealSkillDamageServer(caster, t, cData.baseAtk * 2.0f))
+                        break; // [버그 수정] Thorns 반사로 caster 사망 → AoE 루프 중단
                     t.networkSync.ApplyStatusEffectServer(StatusEffectType.Slow, 2f, 0.5f, caster.networkSync);
                 }
                 yield break;
@@ -132,7 +134,8 @@ public static class SkillSystem
                     var t = h.collider.GetComponent<PlayerController>();
                     if (t != null && !t.IsDead && t != caster)
                     {
-                        DealSkillDamageServer(caster, t, cData.baseAtk * 1.0f);
+                        if (!DealSkillDamageServer(caster, t, cData.baseAtk * 1.0f))
+                            break; // [버그 수정] Thorns 반사로 caster 사망 → AoE 루프 중단
                         t.networkSync.ApplyStatusEffectServer(StatusEffectType.AtkReduction, 2f, 0.2f, caster.networkSync);
                     }
                 }
@@ -160,7 +163,8 @@ public static class SkillSystem
                     var t = c2.collider.GetComponent<PlayerController>();
                     if (t == null || t.IsDead || t == caster || t.networkSync == null) continue;
                     if (!hit.Add(t)) continue;
-                    DealSkillDamageServer(caster, t, cData.baseAtk * 1.0f);
+                    if (!DealSkillDamageServer(caster, t, cData.baseAtk * 1.0f))
+                        break; // [버그 수정] Thorns 반사로 caster 사망 → AoE 루프 중단
                     ApplyKnockbackServer(t, dir, 3f);
                 }
                 yield break;
@@ -183,7 +187,8 @@ public static class SkillSystem
                 if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
                 foreach (var t in GetEnemiesInRadius(caster, 1.2f, targetPos))
                 {
-                    DealSkillDamageServer(caster, t, cData.baseAtk * 1.0f);
+                    if (!DealSkillDamageServer(caster, t, cData.baseAtk * 1.0f))
+                        break; // [버그 수정] Thorns 반사로 caster 사망 → AoE 루프 중단
                     t.networkSync.ApplyStatusEffectServer(StatusEffectType.Slow, 1.5f, 0.3f, caster.networkSync);
                 }
                 yield break;
@@ -196,7 +201,7 @@ public static class SkillSystem
                 yield return new WaitForSeconds(0.6f);
                 if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
                 foreach (var t in GetEnemiesInRadius(caster, 1.5f, targetPos))
-                    DealSkillDamageServer(caster, t, cData.baseAtk * 3.0f);
+                    if (!DealSkillDamageServer(caster, t, cData.baseAtk * 3.0f)) break; // [버그 수정] Thorns 반사로 caster 사망 → AoE 루프 중단
                 yield break;
 
             // ── 버서커 ────────────────────────────────────────────
@@ -288,7 +293,8 @@ public static class SkillSystem
                 if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
                 foreach (var t in GetEnemiesInRadius(caster, 3.5f, targetPos))
                 {
-                    DealSkillDamageServer(caster, t, cData.baseAtk * 2.5f);
+                    if (!DealSkillDamageServer(caster, t, cData.baseAtk * 2.5f))
+                        break; // [버그 수정] Thorns 반사로 caster 사망 → AoE 루프 중단
                     t.networkSync.ApplyStatusEffectServer(StatusEffectType.Burn, 3f,
                         cData.baseAtk * 0.5f, caster.networkSync);
                 }
@@ -368,7 +374,8 @@ public static class SkillSystem
             case ActiveSkillType.HolyExplosion:
                 foreach (var t in GetEnemiesInRadius(caster, 2.5f))
                 {
-                    DealSkillDamageServer(caster, t, cData.baseAtk * 1.0f);
+                    if (!DealSkillDamageServer(caster, t, cData.baseAtk * 1.0f))
+                        break; // [버그 수정] Thorns 반사로 caster 사망 → AoE 루프 중단
                     ApplyKnockbackServer(t,
                         ((Vector2)t.transform.position - caster.Rb.position).normalized, 4f);
                 }
@@ -457,7 +464,8 @@ public static class SkillSystem
                 {
                     var t = h.collider.GetComponent<PlayerController>();
                     if (t != null && !t.IsDead && t != caster)
-                        DealSkillDamageServer(caster, t, cData.baseAtk * 0.6f);
+                        if (!DealSkillDamageServer(caster, t, cData.baseAtk * 0.6f))
+                            break; // [버그 수정] Thorns 반사로 caster 사망 → AoE 루프 중단
                 }
                 yield return new WaitForSeconds(0.4f);
                 // 0.4초 대기 후 시전자 생존 여부 확인 (회부 진행 전 검증)
@@ -466,7 +474,8 @@ public static class SkillSystem
                 {
                     var t = h.collider.GetComponent<PlayerController>();
                     if (t != null && !t.IsDead && t != caster)
-                        DealSkillDamageServer(caster, t, cData.baseAtk * 0.6f);
+                        if (!DealSkillDamageServer(caster, t, cData.baseAtk * 0.6f))
+                            break; // [버그 수정] Thorns 반사로 caster 사망 → AoE 루프 중단
                 }
                 yield break;
             }
@@ -550,7 +559,7 @@ public static class SkillSystem
                 // 4초 대기 후 시전자 생존 여부 확인
                 if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
                 foreach (var t in GetEnemiesInRadius(caster, 3.0f, targetPos))
-                    DealSkillDamageServer(caster, t, cData.baseAtk * 2.5f);
+                    if (!DealSkillDamageServer(caster, t, cData.baseAtk * 2.5f)) break; // [버그 수정] Thorns 반사로 caster 사망 → AoE 루프 중단
                 yield break;
         }
     }
@@ -708,20 +717,25 @@ public static class SkillSystem
     //  서버 전용 스킬 데미지 처리
     // ════════════════════════════════════════════════════════════
 
-    private static void DealSkillDamageServer(PlayerController caster, PlayerController target, float baseDamage)
+    /// <returns>
+    /// [버그 수정] AoE 루프에서 Thorns 반사로 caster가 사망한 경우 루프를 break해야 함.
+    /// false = caster가 이 호출 도중 사망함 (루프 중단 필요).
+    /// true  = 정상 실행 완료 (caster 생존).
+    /// </returns>
+    private static bool DealSkillDamageServer(PlayerController caster, PlayerController target, float baseDamage)
     {
-        if (caster == null || target == null) return;
-        if (target.networkSync == null || target.networkSync.NetworkIsDead.Value) return;
+        if (caster == null || target == null) return true;
+        if (target.networkSync == null || target.networkSync.NetworkIsDead.Value) return true;
 
         var cData = caster.networkSync.ServerData;
         var tData = target.networkSync.ServerData;
-        if (cData == null || tData == null) return;
+        if (cData == null || tData == null) return true;
 
         float dmg = baseDamage * caster.StatusFX.GetAtkMultiplier();
 
         // 닌자 패시브: 15% 회피 — CombatSystem 평타 경로와 동일하게 적용
         if (tData.HasPassive(PassiveSkillType.Ninja) && Random.value < 0.15f)
-            return;
+            return true;
 
         // 행운의 일격 패시브
         if (cData.HasPassive(PassiveSkillType.LuckyStrike) && Random.value < 0.1f)
@@ -747,8 +761,8 @@ public static class SkillSystem
             dmg *= 1.3f;
 
         // 방어 체크
-        if (target.StatusFX.ConsumeDivineGrace()) return;
-        if (target.StatusFX.IsImmune)             return;
+        if (target.StatusFX.ConsumeDivineGrace()) return true;
+        if (target.StatusFX.IsImmune)             return true;
 
         dmg = target.StatusFX.AbsorbWithShield(dmg);
         if (target.StatusFX.IsInDefenseStance) dmg *= 0.5f;
@@ -761,6 +775,9 @@ public static class SkillSystem
         {
             float reflectDmg = Mathf.Max(0.5f, dmg * 0.1f);
             caster.networkSync.ApplyDamageServer(reflectDmg, target.networkSync);
+
+            // 반사 데미지로 공격자가 사망했으면 이후 처리 중단
+            if (caster.networkSync.NetworkIsDead.Value) return false;
         }
 
         dmg = Mathf.Max(0f, Mathf.Round(dmg * 10f) / 10f);
@@ -781,6 +798,10 @@ public static class SkillSystem
         // 비전투 4초 판정이 틀려져 교전 중에도 재생 패시브가 발동하는 버그.
         cData.lastCombatTime = Time.time;
         tData.lastCombatTime = Time.time;
+
+        // [버그 수정] AoE Thorns 반사 사망 체크 반환값.
+        // 여기까지 왔다면 caster가 생존 중임을 보장.
+        return !caster.networkSync.NetworkIsDead.Value;
     }
 
     // ════════════════════════════════════════════════════════════

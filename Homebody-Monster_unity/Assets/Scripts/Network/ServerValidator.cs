@@ -146,7 +146,13 @@ public class ServerValidator : MonoBehaviour
     private async System.Threading.Tasks.Task BanAndKickAsync(
         ulong clientId, PlayerNetworkSync sync, string reason)
     {
-        string userId   = GameManager.Instance?.currentPlayerId ?? sync?.ServerData?.playerName ?? "unknown";
+        // [버그 수정] userId를 GameManager.currentPlayerId(서버 자신의 계정)에서
+        // PlayerNetworkSync._serverUserId(클라이언트가 SubmitCharacterDataServerRpc로 전달한 ID)로 변경.
+        // 데디케이티드 서버의 GameManager는 로그인 계정이 없으므로 currentPlayerId가 빈값이거나
+        // 서버 관리자 계정 ID가 들어있어 치트 플레이어 ID가 ban_logs에 기록되지 않는 버그.
+        string userId   = (!string.IsNullOrEmpty(sync?.ServerUserId) ? sync.ServerUserId : null)
+                          ?? sync?.ServerData?.playerName
+                          ?? "unknown";
         string nickname = sync?.NetworkNickname.Value.ToString() ?? "unknown";
 
         Debug.LogError($"[ServerValidator] BAN: clientId={clientId}, userId={userId}, 사유={reason}");
