@@ -756,6 +756,47 @@ public class PlayerNetworkSync : NetworkBehaviour
     }
 
     // ════════════════════════════════════════════════════════════
+    //  게임 시작 동기화 RPC (InGameManager → 각 클라이언트 오너)
+    // ════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// 서버가 이 플레이어의 Owner 클라이언트에게 게임 시작 시간을 전달합니다.
+    /// NetworkSpawnManager.Instance 참조 실패 문제를 우회하기 위해
+    /// 안정적으로 스폰된 PlayerNetworkSync를 채널로 사용합니다.
+    /// </summary>
+    [ClientRpc]
+    public void NotifyGameStartedOwnerClientRpc(float serverStartTime,
+        ClientRpcParams rpcParams = default)
+    {
+        // Owner가 아닌 클라이언트에서는 무시 (다른 플레이어의 RPC도 수신될 수 있음)
+        if (!IsOwner) return;
+        Debug.Log($"[PlayerNetworkSync] 게임 시작 신호 수신 (serverStartTime={serverStartTime})");
+        InGameManager.Instance?.ClientReceiveGameStart(serverStartTime);
+    }
+
+    /// <summary>
+    /// 서버가 이 플레이어의 Owner 클라이언트 HUD에 카운트다운 메시지를 표시합니다.
+    /// </summary>
+    [ClientRpc]
+    public void ShowCountdownOwnerClientRpc(string message,
+        ClientRpcParams rpcParams = default)
+    {
+        if (!IsOwner) return;
+        InGameHUD.Instance?.ShowGameEndBanner(message);
+    }
+
+    /// <summary>
+    /// 서버가 이 플레이어의 Owner 클라이언트 HUD 배너를 숨깁니다.
+    /// </summary>
+    [ClientRpc]
+    public void HideCountdownOwnerClientRpc(ClientRpcParams rpcParams = default)
+    {
+        if (!IsOwner) return;
+        if (InGameHUD.Instance?.endBannerPanel != null)
+            InGameHUD.Instance.endBannerPanel.SetActive(false);
+    }
+
+    // ════════════════════════════════════════════════════════════
     //  스킬 / 상태이상 (서버에서 호출)
     // ════════════════════════════════════════════════════════════
 

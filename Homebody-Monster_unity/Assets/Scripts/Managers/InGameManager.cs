@@ -307,21 +307,13 @@ public class InGameManager : MonoBehaviour
                 player.networkSync.ResetReviveStateForNewMatch();
         }
 
-        // ── 모든 클라이언트에 서버 기준 시작 시간 전달 ──────────────
-        var spawnMgr = NetworkSpawnManager.Instance;
-        if (spawnMgr == null) spawnMgr = FindFirstObjectByType<NetworkSpawnManager>();
-
-        if (spawnMgr != null)
-            spawnMgr.NotifyGameStartedClientRpc(gameStartTime);
-        else
-            Debug.LogError("[InGameManager] NetworkSpawnManager를 찾을 수 없어 클라이언트에 시작 신호를 보낼 수 없습니다!");
+        // [FIX] NetworkSpawnManager.Instance 참조 실패 문제 해결.
+        // 안정적으로 스폰된 PlayerNetworkSync를 통해 각 클라이언트에 직접 게임 시작 신호 전달.
+        BroadcastGameStarted(gameStartTime);
 
         yield return new WaitForSeconds(1f);
 
-        if (spawnMgr != null)
-            spawnMgr.HideCountdownClientRpc();
-        else
-            HideStatusMessage();
+        BroadcastHideCountdown();
 
         if (timeLimitSeconds > 0f)
             StartCoroutine(TimeLimitRoutine());
@@ -364,17 +356,50 @@ public class InGameManager : MonoBehaviour
         Debug.Log($"[InGameManager] 클라이언트 게임 시작 완료. 생존자: {alivePlayers.Count}명");
     }
 
-    /// <summary>멀티: NetworkSpawnManager ClientRpc, 오프라인/서버: 로컬 HUD 직접 출력</summary>
+    /// <summary>멀티: PlayerNetworkSync ClientRpc, 오프라인/서버: 로컬 HUD 직접 출력</summary>
     private void BroadcastOrShowMessage(string message)
     {
-        var spawnMgr = NetworkSpawnManager.Instance;
-        if (spawnMgr == null) spawnMgr = FindFirstObjectByType<NetworkSpawnManager>();
-
-        if (spawnMgr != null)
-            spawnMgr.ShowCountdownClientRpc(message);
-        
-        // [FIX] 서버(데디케이티드 서버 포함)에서도 모니터링을 위해 화면에 메시지 출력
+        // 서버 화면(데디케이티드 포함)에도 직접 표시
         ShowStatusMessage(message);
+
+        // [FIX] NetworkSpawnManager 대신 스폰된 PlayerNetworkSync를 통해 각 클라이언트에 전달
+        if (Unity.Netcode.NetworkManager.Singleton == null ||
+            !Unity.Netcode.NetworkManager.Singleton.IsServer) return;
+
+        foreach (var p in FindObjectsByType<PlayerNetworkSync>(FindObjectsSortMode.None))
+        {
+            if (p == null || !p.IsSpawned) continue;
+            p.ShowCountdownOwnerClientRpc(message);
+        }
+    }
+
+    /// <summary>게임 시작 시간을 모든 클라이언트 오너에게 전달</summary>
+    private void BroadcastGameStarted(float startTime)
+    {
+        Debug.Log($"[InGameManager] 게임 시작 RPC 브로드캐스트 (startTime={startTime})");
+        if (Unity.Netcode.NetworkManager.Singleton == null ||
+            !Unity.Netcode.NetworkManager.Singleton.IsServer) return;
+
+        foreach (var p in FindObjectsByType<PlayerNetworkSync>(FindObjectsSortMode.None))
+        {
+            if (p == null || !p.IsSpawned) continue;
+            p.NotifyGameStartedOwnerClientRpc(startTime);
+        }
+    }
+
+    /// <summary>카운트다운 배너 숨김을 모든 클라이언트에 전달</summary>
+    private void BroadcastHideCountdown()
+    {
+        HideStatusMessage(); // 서버 화면 배너 숨김
+
+        if (Unity.Netcode.NetworkManager.Singleton == null ||
+            !Unity.Netcode.NetworkManager.Singleton.IsServer) return;
+
+        foreach (var p in FindObjectsByType<PlayerNetworkSync>(FindObjectsSortMode.None))
+        {
+            if (p == null || !p.IsSpawned) continue;
+            p.HideCountdownOwnerClientRpc();
+        }
     }
 
     private void ShowStatusMessage(string message)
