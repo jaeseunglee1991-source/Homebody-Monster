@@ -255,9 +255,14 @@ public class InGameManager : MonoBehaviour
 
     private IEnumerator GameStartSequence()
     {
-        // 접속 대기 — 매 1초마다 메시지 갱신 (RPC 과부하 방지)
+        // [FIX] NetworkManager가 없는 경우(에디터 단독 실행, 오프라인 테스트)에는
+        // minPlayers 대기를 건너뛰고 바로 카운트다운으로 진행합니다.
+        bool isNetworkMode = Unity.Netcode.NetworkManager.Singleton != null
+            && Unity.Netcode.NetworkManager.Singleton.IsListening;
+
+        // 접속 대기 — 매 1초마다 메시지 갱신 (RPC 과부하 방지, 네트워크 모드에서만)
         float waitTime = 0f;
-        while (alivePlayers.Count < minPlayers && waitTime < 15f)
+        while (isNetworkMode && alivePlayers.Count < minPlayers && waitTime < 15f)
         {
             BroadcastOrShowMessage($"다른 생존자 접속 대기 중... ({alivePlayers.Count}/{maxPlayers})");
             yield return new WaitForSeconds(1f);
@@ -280,7 +285,8 @@ public class InGameManager : MonoBehaviour
         BroadcastOrShowMessage("START!");
 
         // 서버(= listen-server 호스트 포함)의 플레이어 잠금 해제
-        foreach (var p in alivePlayers)
+        // [FIX] alivePlayers 대신 씬 전체에서 찾아 해제 (타이밍 이슈 방어)
+        foreach (var p in FindObjectsByType<PlayerController>(FindObjectsSortMode.None))
         {
             if (p != null && !p.IsDead)
             {
@@ -337,15 +343,25 @@ public class InGameManager : MonoBehaviour
         ElapsedGameTime  = 0f;
         MatchReviveUsedCount = 0;
 
-        // 로컬 소유 플레이어 잠금 해제
-        foreach (var p in alivePlayers)
+        // [FIX] alivePlayers 뿐 아니라 씬의 모든 로컬 소유 플레이어를 직접 찾아 잠금 해제.
+        // ClientReceiveGameStart 수신 시점에 alivePlayers가 비어있는 타이밍 이슈를 방어합니다.
+        var allPlayers = FindObjectsByType<PlayerController>(FindObjectsSortMode.None);
+        foreach (var p in allPlayers)
         {
-            if (p != null && !p.IsDead)
-            {
-                p.SetMovementLocked(false);
-                p.SetAttackLocked(false);
-            }
+            if (p == null || p.IsDead) continue;
+            // 잠금 해제 (서버에서 소유한 플레이어가 아닌 모든 플레이어 대상)
+            p.SetMovementLocked(false);
+            p.SetAttackLocked(false);
         }
+
+        // alivePlayers에 없는 경우 보완 등록
+        foreach (var p in allPlayers)
+        {
+            if (p != null) RegisterPlayer(p);
+        }
+
+        RefreshHUD();
+        Debug.Log($"[InGameManager] 클라이언트 게임 시작 완료. 생존자: {alivePlayers.Count}명");
     }
 
     /// <summary>멀티: NetworkSpawnManager ClientRpc, 오프라인/서버: 로컬 HUD 직접 출력</summary>
