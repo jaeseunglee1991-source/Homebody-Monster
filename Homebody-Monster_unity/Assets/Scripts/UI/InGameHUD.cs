@@ -90,13 +90,6 @@ public class InGameHUD : MonoBehaviour
         if (revivePanel    != null) revivePanel.SetActive(false);
         if (killFeedText   != null) killFeedText.text = "";
         
-        // [추가] 시작 시 모든 스킬 버튼을 숨겨 데이터 로드 전 노출 방지
-        if (skillButtons != null)
-        {
-            foreach (var btn in skillButtons)
-                if (btn != null) btn.gameObject.SetActive(false);
-        }
-
         if (timerText == null)
         {
             var tmpList = GetComponentsInChildren<TextMeshProUGUI>(true);
@@ -146,9 +139,16 @@ public class InGameHUD : MonoBehaviour
 
     private void SetupSkillButtons(PlayerController player)
     {
-        if (player?.myData == null) return;
+        if (player?.myData == null ||
+            player.myData.activeSkills == null ||
+            skillButtons == null ||
+            skillButtons.Length == 0)
+        {
+            return;
+        }
+
         List<ActiveSkillType> skills = player.myData.activeSkills;
-        int count = Mathf.Min(skills.Count, skillButtons?.Length ?? 0);
+        int count = Mathf.Min(skills.Count, skillButtons.Length);
         cooldownTimers = new float[skillButtons.Length];
         cooldownMaxes  = new float[skillButtons.Length];
 
