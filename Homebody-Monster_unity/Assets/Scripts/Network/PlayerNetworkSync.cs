@@ -80,7 +80,7 @@ public class PlayerNetworkSync : NetworkBehaviour
     public readonly NetworkVariable<Vector2> NetworkMoveDir = new(
         Vector2.zero,
         NetworkVariableReadPermission.Everyone,
-        NetworkVariableWritePermission.Owner);
+        NetworkVariableWritePermission.Server);
 
     // ── 서버 전용 상태 ──────────────────────────────────────────
     private CharacterData      _serverData;
@@ -1227,4 +1227,11 @@ public class PlayerNetworkSync : NetworkBehaviour
 
     private static int GetActive(CharacterData d, int i)  => i < d.activeSkills.Count  ? (int)d.activeSkills[i]  : -1;
     private static int GetPassive(CharacterData d, int i) => i < d.passiveSkills.Count ? (int)d.passiveSkills[i] : -1;
+
+    [ServerRpc]
+    public void UpdateMoveDirServerRpc(Vector2 dir)
+    {
+        if (NetworkIsDead.Value) return;
+        NetworkMoveDir.Value = dir;
+    }
 }

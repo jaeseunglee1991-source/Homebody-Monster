@@ -49,6 +49,12 @@ public class NetworkSpawnManager : NetworkBehaviour
         Debug.Log("[NetworkSpawnManager] Awake 호출됨");
         if (Instance == null) Instance = this;
         else { Destroy(gameObject); return; }
+
+        // [추가] NetworkManager의 자동 플레이어 스폰 기능을 비활성화합니다.
+        // 이렇게 해야 NetworkSpawnManager의 SpawnPlayer() 로직만 작동하여 중복 생성을 막고 정확한 위치에 스폰됩니다.
+        var netManager = Unity.Netcode.NetworkManager.Singleton;
+        if (netManager != null)
+            netManager.NetworkConfig.PlayerPrefab = null;
     }
 
     public override void OnNetworkSpawn()
@@ -209,6 +215,10 @@ public class NetworkSpawnManager : NetworkBehaviour
         // 모든 플레이어가 접속하거나 타임아웃이 될 때까지 대기
         while (_players.Count < expectedPlayerCount && elapsed < startTimeout)
         {
+            // [보완] 실제 InGameManager에 등록된 인원까지 함께 체크하여 안정성 강화
+            int totalRegistered = InGameManager.Instance != null ? InGameManager.Instance.AliveCount : _players.Count;
+            if (totalRegistered >= expectedPlayerCount) break;
+
             yield return new WaitForSeconds(1f);
             elapsed += 1f;
         }
@@ -216,7 +226,8 @@ public class NetworkSpawnManager : NetworkBehaviour
         if (_gameStarted) yield break;
         _gameStarted = true;
 
-        int connected = _players.Count;
+        // 실제 등록된 인원수를 기준으로 모든 클라이언트에 시작 신호 전송
+        int connected = InGameManager.Instance != null ? InGameManager.Instance.AliveCount : _players.Count;
         if (connected < expectedPlayerCount)
             Debug.LogWarning($"[NetworkSpawnManager] 타임아웃 ({elapsed}초): " +
                              $"{connected}/{expectedPlayerCount}명 접속. 강제 시작.");

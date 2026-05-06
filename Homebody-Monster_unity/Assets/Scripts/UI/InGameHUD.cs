@@ -89,6 +89,13 @@ public class InGameHUD : MonoBehaviour
         if (endBannerPanel != null) endBannerPanel.SetActive(false);
         if (revivePanel    != null) revivePanel.SetActive(false);
         if (killFeedText   != null) killFeedText.text = "";
+        
+        // [추가] 시작 시 모든 스킬 버튼을 숨겨 데이터 로드 전 노출 방지
+        if (skillButtons != null)
+        {
+            foreach (var btn in skillButtons)
+                if (btn != null) btn.gameObject.SetActive(false);
+        }
 
         if (timerText == null)
         {

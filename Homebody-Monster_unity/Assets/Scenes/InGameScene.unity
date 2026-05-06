@@ -1418,6 +1418,8 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 660765969}
+  - component: {fileID: 660765970}
+  - component: {fileID: 660765971}
   m_Layer: 0
   m_Name: SpawnManager
   m_TagString: Untagged
@@ -1448,6 +1450,57 @@ Transform:
   - {fileID: 2056370400}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &660765970
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 660765968}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Unity.Netcode.Runtime::Unity.Netcode.NetworkObject
+  GlobalObjectIdHash: 3373700494
+  InScenePlacedSourceGlobalObjectIdHash: 0
+  DeferredDespawnTick: 0
+  Ownership: 1
+  AlwaysReplicateAsRoot: 0
+  SynchronizeTransform: 0
+  ActiveSceneSynchronization: 0
+  SceneMigrationSynchronization: 0
+  SpawnWithObservers: 1
+  DontDestroyWithOwner: 0
+  AutoObjectParentSync: 1
+  SyncOwnerTransformWhenParented: 1
+  AllowOwnerToParent: 0
+--- !u!114 &660765971
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 660765968}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e57615fc8251c6948bc49d5797cc9912, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::NetworkSpawnManager
+  ShowTopMostFoldoutHeaderGroup: 1
+  playerPrefab: {fileID: 217622531636576715, guid: 6f54aeffbb68a6742920ab6c090231cc, type: 3}
+  spawnPoints:
+  - {fileID: 784016120}
+  - {fileID: 1350425347}
+  - {fileID: 1573944206}
+  - {fileID: 50416171}
+  - {fileID: 1948336946}
+  - {fileID: 1652419503}
+  - {fileID: 968681066}
+  - {fileID: 2056370400}
+  pingMonitorPrefab: {fileID: 3588084952591917820, guid: f702e526af805b24aa5752ffb56e6de8, type: 3}
+  expectedPlayerCount: 2
+  startTimeout: 30
 --- !u!1 &669540324
 GameObject:
   m_ObjectHideFlags: 0
@@ -4006,6 +4059,8 @@ MonoBehaviour:
   timerText: {fileID: 98543169}
   endBannerPanel: {fileID: 217270128}
   endBannerText: {fileID: 2067071289}
+  killFeedText: {fileID: 0}
+  controlsRoot: {fileID: 0}
   revivePanel: {fileID: 136286922}
   reviveTimerText: {fileID: 1026121147}
   reviveInfoText: {fileID: 669540326}

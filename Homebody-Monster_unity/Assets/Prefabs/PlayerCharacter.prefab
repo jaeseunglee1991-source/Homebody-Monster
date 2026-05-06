@@ -16,6 +16,7 @@ GameObject:
   - component: {fileID: -8797049298335260949}
   - component: {fileID: -5838187820538351456}
   - component: {fileID: -7295493613927672004}
+  - component: {fileID: -516533588603172846}
   m_Layer: 0
   m_Name: PlayerCharacter
   m_TagString: Untagged
@@ -211,7 +212,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PlayerController
   ShowTopMostFoldoutHeaderGroup: 1
-  myData:
+  <myData>k__BackingField:
     playerName: 
     job: 0
     affinity: 0
@@ -228,9 +229,30 @@ MonoBehaviour:
   enemyLayer:
     serializedVersion: 2
     m_Bits: 0
-  damagePopupPrefab: {fileID: 0}
   spriteRenderer: {fileID: 0}
   animator: {fileID: 0}
+  trapVisualPrefab: {fileID: 0}
+--- !u!114 &-516533588603172846
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 217622531636576715}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0945d4493177d3443aa6fc614de9e941, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::NetworkPingMonitor
+  ShowTopMostFoldoutHeaderGroup: 1
+  sampleInterval: 0.5
+  smoothingSamples: 8
+  pingTimeout: 2
+  thresholdExcellent: 60
+  thresholdGood: 120
+  thresholdPoor: 200
+  highPingWarningMs: 150
+  highPingWarningCount: 3
 --- !u!1 &3607358072939524198
 GameObject:
   m_ObjectHideFlags: 0

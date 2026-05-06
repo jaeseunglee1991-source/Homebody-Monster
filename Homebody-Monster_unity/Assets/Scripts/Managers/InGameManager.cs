@@ -122,7 +122,19 @@ public class InGameManager : MonoBehaviour
                 : 0f;
 
             if (InGameHUD.Instance != null)
-                InGameHUD.Instance.UpdateTimer(ElapsedGameTime);
+            {
+                // [수정] 5분(300초) 카운트다운 방식으로 표시
+                float remaining = Mathf.Max(0f, timeLimitSeconds - ElapsedGameTime);
+                InGameHUD.Instance.UpdateTimer(remaining);
+
+                // 0초 도달 시 게임 종료
+                if (remaining <= 0f && !gameEnded)
+                {
+                    gameEnded = true;
+                    // 시간 초과 시 생존자 중 HP가 가장 높은 플레이어를 승자로 처리
+                    StartCoroutine(FinishGame(GetHighestHpPlayer()));
+                }
+            }
 
             cleanupTimer += Time.deltaTime;
             if (cleanupTimer >= 1f)

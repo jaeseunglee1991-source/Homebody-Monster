@@ -184,10 +184,10 @@ public class PlayerController : NetworkBehaviour
         moveDir.y = movementJoystick.Vertical;
         if (moveDir.sqrMagnitude > 0.01f) { isChasing = false; targetEnemy = null; }
 
-        // [FIX] 이동 방향을 NetworkVariable에 동기화하여 다른 클라이언트에서 flipX 갱신
+        // [FIX] 이동 방향을 ServerRpc를 통해 동기화하여 권한 에러 해결
         if (networkSync != null && networkSync.IsOwner &&
             Vector2.Distance(networkSync.NetworkMoveDir.Value, moveDir) > 0.05f)
-            networkSync.NetworkMoveDir.Value = moveDir;
+            networkSync.UpdateMoveDirServerRpc(moveDir);
     }
 
     private void HandleTouchAttackInput()
