@@ -113,25 +113,26 @@ CREATE TABLE IF NOT EXISTS public.matchmaking_queue (
     id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     player_id   UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
     nickname    TEXT        NOT NULL DEFAULT '',
+    room_id     TEXT,
     status      TEXT        NOT NULL DEFAULT 'waiting',  -- waiting | matched | cancelled
-    joined_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    joined_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Realtime 필터 (player_id=eq.xxx) 가 UPDATE/DELETE 에서도 동작하려면 FULL 필요
+-- Realtime 필터 (player_id=eq.xxx / id=eq.xxx) 가 UPDATE/DELETE 에서도 동작하려면 FULL 필요
 ALTER TABLE public.matchmaking_queue REPLICA IDENTITY FULL;
+ALTER TABLE public.private_rooms     REPLICA IDENTITY FULL;  -- H-15 필터 동작
 
 ALTER TABLE public.matchmaking_queue ENABLE ROW LEVEL SECURITY;
 
--- 본인 행만 INSERT 가능 (S-1 핵심 정책)
+-- 본인 행만 INSERT 가능 (S-1 핵심 정책) + nickname 길이 검증
 CREATE POLICY IF NOT EXISTS "queue_insert_own"
     ON public.matchmaking_queue FOR INSERT
-    WITH CHECK (auth.uid() = player_id);
+    WITH CHECK ((auth.uid() = player_id) AND (length(nickname) >= 2));
 
--- 본인 행만 SELECT 가능
-CREATE POLICY IF NOT EXISTS "queue_select_own"
+-- 매칭 알고리즘이 다른 대기자의 'waiting' 행을 볼 수 있어야 하므로 SELECT는 status=waiting 또는 본인 행
+CREATE POLICY IF NOT EXISTS "queue_select_waiting"
     ON public.matchmaking_queue FOR SELECT
-    USING (auth.uid() = player_id);
+    USING ((status = 'waiting') OR (auth.uid() = player_id));
 
 -- 본인 행만 UPDATE 가능 (status 변경 등)
 CREATE POLICY IF NOT EXISTS "queue_update_own"
@@ -143,10 +144,7 @@ CREATE POLICY IF NOT EXISTS "queue_delete_own"
     ON public.matchmaking_queue FOR DELETE
     USING (auth.uid() = player_id);
 
--- 서버(service_role)는 전체 접근 허용 (매칭 처리)
-CREATE POLICY IF NOT EXISTS "queue_service_all"
-    ON public.matchmaking_queue FOR ALL
-    USING (auth.role() = 'service_role');
+-- service_role 은 RLS 를 우회하므로 별도 정책 불필요.
 
 -- ── 8. leave_matchmaking_queue RPC ──────────────────────────────
 -- 클라이언트가 매칭 대기를 취소할 때 호출 (본인 행만 삭제)
@@ -169,10 +167,18 @@ CREATE OR REPLACE FUNCTION public.update_queue_status(
     p_status    TEXT
 ) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
 BEGIN
+    -- 클라이언트(anon/authenticated) 호출 차단: service_role 만 허용
+    IF auth.role() != 'service_role' THEN
+        RAISE EXCEPTION 'Unauthorized: service_role required';
+    END IF;
+    IF p_status NOT IN ('waiting','matched','cancelled') THEN
+        RAISE EXCEPTION 'Invalid status value: %', p_status;
+    END IF;
     UPDATE public.matchmaking_queue
-    SET    status     = p_status,
-           updated_at = now()
+    SET    status = p_status
     WHERE  id = ANY(p_queue_ids);
 END;
 $$;
--- 이 함수는 Service Role Key 로만 호출해야 합니다 (dedicated server 전용).
+
+REVOKE ALL ON FUNCTION public.update_queue_status(UUID[], TEXT) FROM PUBLIC, anon, authenticated;
+GRANT  EXECUTE ON FUNCTION public.update_queue_status(UUID[], TEXT) TO service_role;
