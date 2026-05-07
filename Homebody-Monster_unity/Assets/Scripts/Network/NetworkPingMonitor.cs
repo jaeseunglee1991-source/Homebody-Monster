@@ -113,10 +113,18 @@ public class NetworkPingMonitor : NetworkBehaviour
         // [Fix-4] 저장 Task: 이전 CTS 정리 후 새로 생성해 Task 시작.
         // _saveTask 참조를 보관해 GC 조기 수집을 방지한다.
         // OnDestroy에서는 _saveCts를 취소하지 않음 — Supabase 왕복 완료 전 취소 방지.
-        _saveCts?.Cancel();
-        _saveCts?.Dispose();
-        _saveCts  = new CancellationTokenSource();
-        _saveTask = SaveSessionPingAsync(_saveCts.Token);
+        // [C-8] 진행 중인 저장 Task가 있으면 새로 시작하지 않음 (중복 저장 방지)
+        if (_saveTask == null || _saveTask.IsCompleted)
+        {
+            _saveCts?.Cancel();
+            _saveCts?.Dispose();
+            _saveCts  = new CancellationTokenSource();
+            _saveTask = SaveSessionPingAsync(_saveCts.Token);
+        }
+        else
+        {
+            Debug.Log("[PingMonitor] 이전 저장 Task 진행 중 — 새 저장 스킵");
+        }
 
         if (Instance == this) Instance = null;
 

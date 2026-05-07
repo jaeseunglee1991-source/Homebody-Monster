@@ -103,6 +103,7 @@ public class PlayerNetworkSync : NetworkBehaviour
     private bool _hasUsedRevive      = false;
     private bool _isProcessingRevive = false;
     private CancellationTokenSource _reviveCts = null;
+    private Coroutine _regenCoroutine = null;
 
     public CharacterData ServerData  => _serverData;
     // [버그 수정] ServerValidator.BanAndKickAsync가 정확한 userId를 참조할 수 있도록 공개
@@ -262,7 +263,8 @@ public class PlayerNetworkSync : NetworkBehaviour
         // CombatSystem.RegenerationRoutine은 data.currentHp만 수정하고 NetworkHp.Value를 갱신하지 않아
         // 다른 클라이언트에 HP 회복이 전파되지 않고 서버 전투 판정과도 불일치 발생.
         // HealServer()를 사용하는 전용 코루틴으로 대체하여 NetworkHp.Value 동기화 보장.
-        StartCoroutine(RegenerationNetworkRoutine());
+        if (_regenCoroutine != null) StopCoroutine(_regenCoroutine);
+        _regenCoroutine = StartCoroutine(RegenerationNetworkRoutine());
     }
 
     private System.Collections.IEnumerator RegenerationNetworkRoutine()
@@ -344,17 +346,17 @@ public class PlayerNetworkSync : NetworkBehaviour
 
         DamageResult result = CombatSystem.CalculateDamage(_serverData, targetSync._serverData, attackerFx, targetFx);
 
+        // 원래 공격 데미지는 Thorns 반사와 무관하게 타겟에게 항상 적용 (먼저 처리하여 Thorns 사망 판정이 올바른 HP 순서를 보도록)
+        float newHp = Mathf.Max(0f, targetSync.NetworkHp.Value - result.finalDamage);
+        targetSync.NetworkHp.Value       = newHp;
+        targetSync._serverData.currentHp = newHp;
+
         if (!result.isEvaded && !result.isDivineGraceBlocked && result.finalDamage > 0f)
         {
             // PostDamageEffects: 흡혈(공격자 HP 회복), 가시갑옥(공격자 HP 감소), lastCombatTime 등 처리
             CombatSystem.PostDamageEffects(_serverData, targetSync._serverData, attackerFx, targetFx, result.finalDamage);
             NetworkHp.Value = Mathf.Clamp(_serverData.currentHp, 0f, NetworkMaxHp.Value);
         }
-
-        // 원래 공격 데미지는 Thorns 반사와 무관하게 타겟에게 항상 적용
-        float newHp = Mathf.Max(0f, targetSync.NetworkHp.Value - result.finalDamage);
-        targetSync.NetworkHp.Value       = newHp;
-        targetSync._serverData.currentHp = newHp;
 
         targetSync.NotifyHitClientRpc(result);
 
@@ -514,7 +516,7 @@ public class PlayerNetworkSync : NetworkBehaviour
     {
         try
         {
-            await Task.Delay(7000, token); // 7.0초 대기: UI 5초 + RTT 여유 2초 (취소 가능)
+            await Task.Delay(6000, token); // 6.0초 대기: UI 5초 + RTT 여유 1초 (취소 가능)
         }
         catch (TaskCanceledException)
         {
@@ -627,7 +629,7 @@ public class PlayerNetworkSync : NetworkBehaviour
                     ticketTask,
                     System.Threading.Tasks.Task.Delay(10000, cts.Token));
                 if (completedTask == ticketTask)
-                    success = ticketTask.Result;
+                    success = ticketTask.IsCompletedSuccessfully && ticketTask.Result;
                 else
                     Debug.LogWarning("[PlayerNetworkSync] 티켓 차감 타임아웃 (10초) → 부활 거부");
             }

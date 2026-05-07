@@ -120,11 +120,14 @@ public class SpectatorManager : MonoBehaviour
         var target = _targets[index];
         if (target == null) { RefreshTargetList(); return; }
 
-        // Cinemachine 3.x: Follow / LookAt 대상 교체
+        // Cinemachine 3.x: Target 구조체로 Follow / LookAt 일괄 교체
         if (virtualCamera != null)
         {
-            virtualCamera.Follow = target.transform;
-            virtualCamera.LookAt = target.transform;
+            virtualCamera.Target = new CameraTarget
+            {
+                TrackingTarget = target.transform,
+                LookAtTarget = target.transform
+            };
         }
 
         string name = target.myData?.playerName ?? $"Player_{index}";
@@ -136,8 +139,7 @@ public class SpectatorManager : MonoBehaviour
     {
         _targets.Clear();
 
-        var mgr = InGameManager.Instance;
-        if (mgr == null) return;
+        if (InGameManager.Instance == null) return;
 
         // alivePlayers에서 로컬 플레이어 제외
         foreach (var p in FindObjectsByType<PlayerController>(FindObjectsSortMode.None))

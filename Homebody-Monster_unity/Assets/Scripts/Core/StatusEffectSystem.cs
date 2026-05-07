@@ -121,6 +121,13 @@ public class StatusEffectSystem : MonoBehaviour
 
     private void TickEffects()
     {
+        // [C-12] elapsed 진행 및 DoT 틱은 서버 권한.
+        // 클라이언트 틱은 deltaTime 차이로 만료 시점이 어긋나 desync를 유발하므로
+        // 서버 또는 싱글 모드(netSync == null)에서만 진행.
+        var netSync = owner.networkSync;
+        bool isAuthoritative = netSync == null || netSync.IsServer;
+        if (!isAuthoritative) return;
+
         for (int i = effects.Count - 1; i >= 0; i--)
         {
             var e = effects[i];

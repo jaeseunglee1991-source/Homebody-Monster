@@ -196,8 +196,11 @@ public class LeaderboardManager : MonoBehaviour
     private void ClearContent(Transform content)
     {
         if (content == null) return;
-        foreach (Transform child in content)
-            Destroy(child.gameObject);
+        // H-16: Destroy()는 프레임 말미까지 지연되어 RenderLeaderboard/RenderHistory가
+        // 즉시 AppendRow → Instantiate를 호출하면 이전 행과 새 행이 한 프레임 동안 공존.
+        // 물리 콜백 경로가 아닌 UI 갱신 경로이므로 DestroyImmediate 사용 가능.
+        for (int i = content.childCount - 1; i >= 0; i--)
+            DestroyImmediate(content.GetChild(i).gameObject);
     }
 
     private void AppendRow(Transform content, GameObject prefab, string text, Color color)

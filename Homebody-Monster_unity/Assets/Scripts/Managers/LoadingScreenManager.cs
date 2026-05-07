@@ -97,9 +97,17 @@ public class LoadingScreenManager : MonoBehaviour
 
         _pendingScene = sceneName;
 
-        // LoadingScene이 Build Settings에 없으면 동기 폴백 (기존 동작 유지)
-        if (SceneUtility.GetBuildIndexByScenePath("LoadingScene") < 0 &&
-            SceneUtility.GetBuildIndexByScenePath("Assets/Scenes/LoadingScene.unity") < 0)
+        // LoadingScene이 Build Settings에 등록되어 있는지 씬 이름 비교로 확인
+        bool loadingSceneFound = false;
+        int sceneCount = SceneManager.sceneCountInBuildSettings;
+        for (int i = 0; i < sceneCount; i++)
+        {
+            string path = SceneUtility.GetScenePathByBuildIndex(i);
+            string name = System.IO.Path.GetFileNameWithoutExtension(path);
+            if (name == "LoadingScene") { loadingSceneFound = true; break; }
+        }
+
+        if (!loadingSceneFound)
         {
             Debug.LogWarning("[LoadingScreen] 'LoadingScene'이 Build Settings에 없습니다. 동기 로드로 폴백.");
             SceneManager.LoadScene(sceneName);
@@ -129,20 +137,24 @@ public class LoadingScreenManager : MonoBehaviour
         if (tipText != null)
             tipText.text = Tips[Random.Range(0, Tips.Length)];
 
-        if (sceneNameText != null && _pendingScene != null)
+        // 정적 _pendingScene을 로컬로 캡처하고 즉시 비웁니다 (재진입/누수 방지).
+        string sceneToLoad = _pendingScene;
+        _pendingScene = null;
+
+        if (sceneNameText != null && sceneToLoad != null)
         {
-            sceneNameText.text = SceneDisplayNames.TryGetValue(_pendingScene, out string display)
+            sceneNameText.text = SceneDisplayNames.TryGetValue(sceneToLoad, out string display)
                 ? display
-                : $"{_pendingScene} 로드 중...";
+                : $"{sceneToLoad} 로드 중...";
         }
 
-        if (_pendingScene == null)
+        if (sceneToLoad == null)
         {
             Debug.LogError("[LoadingScreen] pendingScene이 null입니다. LoadSceneAsync()를 통해 진입하세요.");
             return;
         }
 
-        StartCoroutine(LoadRoutine(_pendingScene));
+        StartCoroutine(LoadRoutine(sceneToLoad));
     }
 
     private void Update()
@@ -188,7 +200,6 @@ public class LoadingScreenManager : MonoBehaviour
                 if (autoActivate)
                 {
                     yield return new WaitForSeconds(autoActivateDelay);
-                    _pendingScene = null;
                     op.allowSceneActivation = true;
                 }
                 else
@@ -199,7 +210,6 @@ public class LoadingScreenManager : MonoBehaviour
                     while (_readyToActivate)
                         yield return null;
 
-                    _pendingScene = null;
                     op.allowSceneActivation = true;
                 }
                 yield break;

@@ -80,8 +80,21 @@ public class CombatSystem : MonoBehaviour
         { dmg *= execMult; result.isExecutioner = true; }
 
         // ── 쉴드 HP 흡수 ─────────────────────────────────────
-        if (defenderFX != null && defender.shieldHp > 0f)
-        { dmg = defenderFX.AbsorbWithShield(dmg); result.isShielded = true; }
+        // H-19: defenderFX가 null이어도 shieldHp > 0이면 쉴드 로직 적용 (이전: FX null이면 쉴드 무시되는 버그).
+        if (defender.shieldHp > 0f)
+        {
+            if (defenderFX != null)
+            {
+                dmg = defenderFX.AbsorbWithShield(dmg);
+            }
+            else
+            {
+                float absorbed = Mathf.Min(defender.shieldHp, dmg);
+                defender.shieldHp -= absorbed;
+                dmg -= absorbed;
+            }
+            result.isShielded = true;
+        }
 
         // ── 방어 태세 ─────────────────────────────────────────
         float defStanceReduction = cfg != null ? cfg.DefenseStanceDamageReduction : 0.5f;

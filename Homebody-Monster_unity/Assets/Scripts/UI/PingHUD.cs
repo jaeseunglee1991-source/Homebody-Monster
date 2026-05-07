@@ -259,8 +259,9 @@ public class PingHUD : MonoBehaviour
         TrySubscribe();
 
         var monitor = _monitorRef ?? NetworkPingMonitor.Instance;
-        if (monitor == null)
+        if (monitor == null || monitor.SmoothedRttMs <= 0)
         {
+            // 초기화 전이거나 첫 RTT 샘플이 도착하기 전 — "-- ms" 등 대기 텍스트 표시
             if (pingText != null) pingText.text = waitingText;
             return;
         }

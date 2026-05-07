@@ -355,7 +355,12 @@ public class NetworkRoomManager : MonoBehaviour
         {
             _roomChannel = SupabaseManager.Instance.Client.Realtime
                 .Channel($"private_rooms:{roomId}");
-            _roomChannel.Register(new PostgresChangesOptions("public", "private_rooms"));
+            // H-15: 본인이 속한 방의 변경사항만 수신하도록 id 필터 적용 (불필요한 트래픽 방지)
+            _roomChannel.Register(new PostgresChangesOptions(
+                "public",
+                "private_rooms",
+                filter: $"id=eq.{roomId}"
+            ));
             _roomChannel.AddPostgresChangeHandler(ListenType.Updates,
                 (_, c) => MainThreadDispatcher.Enqueue(() => OnRoomUpdated(c, roomId)));
             await _roomChannel.Subscribe();

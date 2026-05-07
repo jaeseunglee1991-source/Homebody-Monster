@@ -105,3 +105,74 @@ BEGIN
 END;
 $$;
 */
+
+-- ── 7. matchmaking_queue ─────────────────────────────────────────
+-- 클라이언트가 매칭 대기열에 자신을 등록하는 테이블.
+-- S-1: player_id = auth.uid() 강제로 타인 ID 사칭 INSERT 차단.
+CREATE TABLE IF NOT EXISTS public.matchmaking_queue (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    player_id   UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    nickname    TEXT        NOT NULL DEFAULT '',
+    status      TEXT        NOT NULL DEFAULT 'waiting',  -- waiting | matched | cancelled
+    joined_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Realtime 필터 (player_id=eq.xxx) 가 UPDATE/DELETE 에서도 동작하려면 FULL 필요
+ALTER TABLE public.matchmaking_queue REPLICA IDENTITY FULL;
+
+ALTER TABLE public.matchmaking_queue ENABLE ROW LEVEL SECURITY;
+
+-- 본인 행만 INSERT 가능 (S-1 핵심 정책)
+CREATE POLICY IF NOT EXISTS "queue_insert_own"
+    ON public.matchmaking_queue FOR INSERT
+    WITH CHECK (auth.uid() = player_id);
+
+-- 본인 행만 SELECT 가능
+CREATE POLICY IF NOT EXISTS "queue_select_own"
+    ON public.matchmaking_queue FOR SELECT
+    USING (auth.uid() = player_id);
+
+-- 본인 행만 UPDATE 가능 (status 변경 등)
+CREATE POLICY IF NOT EXISTS "queue_update_own"
+    ON public.matchmaking_queue FOR UPDATE
+    USING (auth.uid() = player_id);
+
+-- 본인 행만 DELETE 가능 (큐 이탈)
+CREATE POLICY IF NOT EXISTS "queue_delete_own"
+    ON public.matchmaking_queue FOR DELETE
+    USING (auth.uid() = player_id);
+
+-- 서버(service_role)는 전체 접근 허용 (매칭 처리)
+CREATE POLICY IF NOT EXISTS "queue_service_all"
+    ON public.matchmaking_queue FOR ALL
+    USING (auth.role() = 'service_role');
+
+-- ── 8. leave_matchmaking_queue RPC ──────────────────────────────
+-- 클라이언트가 매칭 대기를 취소할 때 호출 (본인 행만 삭제)
+CREATE OR REPLACE FUNCTION public.leave_matchmaking_queue(
+    p_player_id UUID
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+    -- SECURITY DEFINER이지만 auth.uid() 일치 검증으로 타인 행 삭제 차단
+    IF auth.uid() != p_player_id THEN
+        RAISE EXCEPTION 'Unauthorized';
+    END IF;
+    DELETE FROM public.matchmaking_queue WHERE player_id = p_player_id;
+END;
+$$;
+
+-- ── 9. update_queue_status RPC ───────────────────────────────────
+-- H-23: server_assign_match 실패 시 서버가 큐 상태를 cancelled 로 갱신
+CREATE OR REPLACE FUNCTION public.update_queue_status(
+    p_queue_ids UUID[],
+    p_status    TEXT
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+    UPDATE public.matchmaking_queue
+    SET    status     = p_status,
+           updated_at = now()
+    WHERE  id = ANY(p_queue_ids);
+END;
+$$;
+-- 이 함수는 Service Role Key 로만 호출해야 합니다 (dedicated server 전용).

@@ -53,10 +53,14 @@ public class PlayerController : NetworkBehaviour
     public StatusEffectSystem StatusFX    { get; private set; }
     public PlayerNetworkSync  networkSync { get; private set; }
 
+    public readonly NetworkVariable<bool> NetworkIsChasing = new(
+        false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
     private Vector2          moveDir;
     private PlayerController targetEnemy;
     private float            lastAttackTime = -999f;
     private bool             isChasing      = false;
+    private bool             _lastSyncedChasing = false;
     private bool             movementLocked = true;
     // [FIX] 초기 상태를 잠금(true)으로 변경. InGameManager에서 게임 시작 시 명시적으로 풀어주기 전까지 이동 불가.
     private bool             attackLocked   = true;
@@ -126,6 +130,12 @@ public class PlayerController : NetworkBehaviour
             HandleTouchAttackInput();
         }
 
+        if (IsOwner && isChasing != _lastSyncedChasing)
+        {
+            _lastSyncedChasing = isChasing;
+            SyncChasingToServer(isChasing);
+        }
+
         // [FIX] UpdateAnimation을 IsOwner 조건 밖으로 이동.
         // 기존: !IsOwner이면 UpdateAnimation()을 호출하지 않아
         //        다른 플레이어 캐릭터의 spriteRenderer.flipX가 전혀 갱신되지 않음.
@@ -141,7 +151,11 @@ public class PlayerController : NetworkBehaviour
 
         if (movementLocked)
         {
-            Rb.linearVelocity = Vector2.zero;
+            #if UNITY_6000_0_OR_NEWER
+                Rb.linearVelocity = Vector2.zero;
+            #else
+                Rb.velocity = Vector2.zero;
+            #endif
             return;
         }
 
@@ -493,10 +507,22 @@ public class PlayerController : NetworkBehaviour
             ? moveDir
             : (networkSync != null ? networkSync.NetworkMoveDir.Value : Vector2.zero);
 
-        animator.SetBool("IsMoving", displayDir.sqrMagnitude > 0.01f || isChasing);
+        bool displayChasing = IsOwner ? isChasing : NetworkIsChasing.Value;
+        animator.SetBool("IsMoving", displayDir.sqrMagnitude > 0.01f || displayChasing);
         if (spriteRenderer == null) return;
         if      (displayDir.x > 0.05f)  spriteRenderer.flipX = false;
         else if (displayDir.x < -0.05f) spriteRenderer.flipX = true;
+    }
+
+    [ServerRpc]
+    private void SetChasingServerRpc(bool chasing)
+    {
+        NetworkIsChasing.Value = chasing;
+    }
+
+    private void SyncChasingToServer(bool chasing)
+    {
+        if (IsOwner && IsSpawned) SetChasingServerRpc(chasing);
     }
 
     private void OnDrawGizmosSelected()

@@ -357,15 +357,19 @@ public class MatchmakingManager : MonoBehaviour
 
         while (true)
         {
-            await Task.Delay(2000);
-            if (!ValidateSupabase()) continue;
             try
             {
+                await Task.Delay(2000);
+                if (!ValidateSupabase()) continue;
                 var queue = await FetchWaitingPlayers();
                 UpdatePlayerFirstSeen(queue);
                 var eligible = GetEligiblePlayers(queue);
                 if (eligible.Count >= minPlayers)
                     await ExecuteServerMatch(eligible);
+            }
+            catch (TaskCanceledException)
+            {
+                // Task.Delay 취소는 무시하고 루프 유지
             }
             catch (Exception e)
             {
@@ -451,7 +455,26 @@ public class MatchmakingManager : MonoBehaviour
                     .LoadScene("InGameScene", UnityEngine.SceneManagement.LoadSceneMode.Single);
             }
         }
-        catch (Exception e) { Debug.LogError($"[Server] 매칭 DB 업데이트 실패: {e.Message}"); }
+        catch (Exception e)
+        {
+            Debug.LogError($"[Server] 매칭 DB 업데이트 실패: {e.Message}");
+            // H-23: server_assign_match 실패 시 큐에 남은 플레이어들의 상태를
+            // 'cancelled'로 업데이트하여 무한 대기 방지.
+            try
+            {
+                var cancelParam = new Dictionary<string, object>
+                {
+                    { "p_queue_ids", players.Select(p => p.Id).ToList() },
+                    { "p_status",    "cancelled" }
+                };
+                await SupabaseManager.Instance.Client.Rpc<string>("update_queue_status", cancelParam);
+                Debug.LogWarning($"[Server] ⚠️ {players.Count}명 큐 상태를 'cancelled'로 복구");
+            }
+            catch (Exception cancelEx)
+            {
+                Debug.LogError($"[Server] 큐 상태 복구도 실패: {cancelEx.Message}");
+            }
+        }
     }
 
     // ════════════════════════════════════════════════════════════
@@ -530,6 +553,9 @@ public class MatchmakingManager : MonoBehaviour
     //  🛠 공통 내부 메서드
     // ════════════════════════════════════════════════════════════
 
+    // S-1: 이 INSERT는 matchmaking 테이블의 RLS 정책 (auth.uid() = player_id INSERT 허용)에
+    // 의존한다. RLS 정책이 누락/변경되면 항상 실패하므로 별도 SQL 마이그레이션 작업으로
+    // 정책을 검증해야 한다. (이 코드 자체는 변경하지 않음.)
     private async Task<bool> InsertQueueEntry()
     {
         try

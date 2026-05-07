@@ -70,20 +70,17 @@ public class SettingsManager : MonoBehaviour
         // 세로형(Portrait) 기기에서는 height > width 이므로 아래와 같이 계산합니다.
         float screenAspect = (float)Screen.height / Screen.width;
 
-        if (IsLowResolution)
-        {
-            // 저사양 모드: 가로 해상도 720p (갤럭시 A 시리즈급 배터리 절약)
-            int w = 720;
-            int h = Mathf.RoundToInt(w * screenAspect);
-            Screen.SetResolution(w, h, FullScreenMode.FullScreenWindow);
-        }
-        else
-        {
-            // 일반 모드: 가로 해상도 1080p (현재 안드로이드 표준)
-            int w = 1080;
-            int h = Mathf.RoundToInt(w * screenAspect);
-            Screen.SetResolution(w, h, FullScreenMode.FullScreenWindow);
-        }
+        // 저사양 모드: 가로 720p / 일반: 1080p
+        int targetW = IsLowResolution ? 720 : 1080;
+        int targetH = Mathf.RoundToInt(targetW * screenAspect);
+
+#if UNITY_ANDROID
+        // 안드로이드는 항상 풀스크린 → bool 오버로드 사용
+        Screen.SetResolution(targetW, targetH, true);
+#else
+        // 데스크톱/에디터: FullScreenMode 명시
+        Screen.SetResolution(targetW, targetH, FullScreenMode.FullScreenWindow);
+#endif
     }
 
     // ════════════════════════════════════════════════════════════

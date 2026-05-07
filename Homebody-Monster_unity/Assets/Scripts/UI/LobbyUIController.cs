@@ -139,6 +139,9 @@ public class LobbyUIController : MonoBehaviour
 
         // 7. 유저 프로필 정보 로드 및 UI 반영
         RefreshUserProfileUI();
+
+        // H-6: 마지막 로그인 시각 갱신
+        _ = SupabaseManager.Instance?.UpdateLastLogin();
     }
 
     /// <summary>
@@ -158,7 +161,7 @@ public class LobbyUIController : MonoBehaviour
         if (SupabaseManager.Instance == null || string.IsNullOrEmpty(GameManager.Instance?.currentPlayerId)) return;
 
         string playerId = GameManager.Instance.currentPlayerId;
-        var profile = await SupabaseManager.Instance.GetOrCreateProfile(playerId);
+        var profile = await SupabaseManager.Instance.GetProfile(playerId);
 
         if (this == null) return; // await 도중 씬이 전환되어 오브젝트가 파괴된 경우 방어
 

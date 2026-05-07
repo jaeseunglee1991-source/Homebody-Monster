@@ -227,12 +227,10 @@ public class DailyRewardSystem : MonoBehaviour
     {
         if (_isClaiming) return;
 
+        // [C-14] 로컬 캐시는 UX 힌트에 불과하므로 서버 호출을 막지 않음.
+        // 다른 기기 수령/시간대 변경 등 캐시가 오래된 경우에도 서버 응답으로 권위 판정.
         if (AlreadyClaimedTodayLocally())
-        {
-            SetStatus("오늘 이미 수령하셨습니다.");
-            if (claimButton != null) claimButton.interactable = false;
-            return;
-        }
+            SetStatus("확인 중...");
 
         // [Bug Fix #2] null + IsInitialized 이중 체크
         if (SupabaseManager.Instance == null || !SupabaseManager.Instance.IsInitialized)
@@ -245,46 +243,52 @@ public class DailyRewardSystem : MonoBehaviour
         if (claimButton != null) claimButton.interactable = false;
         SetStatus("서버에 요청 중...");
 
-        var result = await SupabaseManager.Instance.ClaimDailyReward();
-
-        // [Bug Fix #3] await 복귀 후 씬 전환 여부 재확인
-        if (this == null) return;
-
-        _isClaiming = false;
-
-        if (result == null)
+        try
         {
-            SetStatus("⚠ 서버 오류. 잠시 후 다시 시도해주세요.");
-            if (claimButton != null) claimButton.interactable = true;
-            return;
-        }
+            var result = await SupabaseManager.Instance.ClaimDailyReward();
 
-        if (result.AlreadyClaimed)
-        {
+            // [Bug Fix #3] await 복귀 후 씬 전환 여부 재확인
+            if (this == null) return;
+
+            if (result == null)
+            {
+                SetStatus("⚠ 서버 오류. 잠시 후 다시 시도해주세요.");
+                if (claimButton != null) claimButton.interactable = true;
+                return;
+            }
+
+            if (result.AlreadyClaimed)
+            {
+                SaveLocalClaim(result.Streak);
+                SetStatus("오늘 이미 수령하셨습니다.");
+                DrawDaySlots(result.Streak, alreadyClaimed: true);
+                if (streakText  != null) streakText.text = $"✅ {result.Streak}일 연속 출석 완료!";
+                if (claimButton != null) claimButton.interactable = false;
+                return;
+            }
+
+            // ── 수령 성공 ──────────────────────────────────────────
             SaveLocalClaim(result.Streak);
-            SetStatus("오늘 이미 수령하셨습니다.");
             DrawDaySlots(result.Streak, alreadyClaimed: true);
-            if (streakText  != null) streakText.text = $"✅ {result.Streak}일 연속 출석 완료!";
-            if (claimButton != null) claimButton.interactable = false;
-            return;
+
+            if (rewardText != null) rewardText.text = $"🍕 {result.RewardPizza} 피자 획득!";
+            if (streakText != null) streakText.text = $"✅ {result.Streak}일 연속 출석 완료!";
+            SetStatus("");
+
+            pizzaFlyAnimator?.SetTrigger("Play");
+            if (claimSoundClip != null && _audioSource != null)
+                _audioSource.PlayOneShot(claimSoundClip);
+
+            // 피자 카운트 UI 갱신
+            StartCoroutine(RefreshPizzaUIAfterDelay(0.5f));
+
+            Debug.Log($"[DailyReward] ✅ 수령 완료 — streak={result.Streak}, pizza={result.RewardPizza}");
         }
-
-        // ── 수령 성공 ──────────────────────────────────────────
-        SaveLocalClaim(result.Streak);
-        DrawDaySlots(result.Streak, alreadyClaimed: true);
-
-        if (rewardText != null) rewardText.text = $"🍕 {result.RewardPizza} 피자 획득!";
-        if (streakText != null) streakText.text = $"✅ {result.Streak}일 연속 출석 완료!";
-        SetStatus("");
-
-        pizzaFlyAnimator?.SetTrigger("Play");
-        if (claimSoundClip != null && _audioSource != null)
-            _audioSource.PlayOneShot(claimSoundClip);
-
-        // 피자 카운트 UI 갱신
-        StartCoroutine(RefreshPizzaUIAfterDelay(0.5f));
-
-        Debug.Log($"[DailyReward] ✅ 수령 완료 — streak={result.Streak}, pizza={result.RewardPizza}");
+        finally
+        {
+            // H-1: ensure flag is always restored
+            if (this != null) _isClaiming = false;
+        }
     }
 
     private IEnumerator RefreshPizzaUIAfterDelay(float delay)

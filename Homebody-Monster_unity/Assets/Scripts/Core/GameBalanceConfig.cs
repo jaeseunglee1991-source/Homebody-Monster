@@ -33,7 +33,9 @@ public class GameBalanceConfig : ScriptableObject
         return _instance;
     }
 
-    private void OnValidate() => _instance = this; // Inspector 수정 시 캐시 갱신
+#if UNITY_EDITOR
+    private void OnValidate() => _instance = this; // Inspector 수정 시 캐시 갱신 (에디터 전용)
+#endif
 
     // ════════════════════════════════════════════════════════════
     //  ① 기본 스탯
