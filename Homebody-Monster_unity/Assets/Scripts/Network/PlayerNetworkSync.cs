@@ -386,6 +386,8 @@ public class PlayerNetworkSync : NetworkBehaviour
 
         // [버그 수정 X-F] Thorns 반사를 정상 데미지 파이프라인(ApplyDamageServer)으로 처리.
         // 무한 반사 방지를 위해 _thornsReflecting 플래그로 재진입 차단.
+        // 메인 브랜치의 Thorns 재설계(ApplyDamageServer 경로)가 본 worktree의 ProcessDeath 자해 패치를
+        // 대체하므로, 충돌 해결 시 메인 버전을 채택. ApplyDamageServer가 사망/킬 크레딧을 일관되게 처리한다.
         if (!result.isEvaded && !result.isDivineGraceBlocked && result.finalDamage > 0f
             && !_thornsReflecting)
         {
