@@ -431,6 +431,8 @@ public static class SkillSystem
                     ? tVel.normalized
                     : (serverFacing != Vector2.zero ? -serverFacing : Vector2.right);
                 Vector2 dest = (Vector2)t.transform.position - tFacing * 0.8f;
+                // [Fix] 안티치트 텔레포트 오탐지 방지 — 서버 권한 텔레포트 면제 등록.
+                ServerValidator.Instance?.RegisterSkillTeleport(caster.networkSync.OwnerClientId);
                 // Owner 클라이언트에게 순간이동 지시 (ClientNetworkTransform 권한 대응)
                 caster.networkSync.ForcePositionClientRpc(dest,
                     OwnerRpcParams(caster.networkSync.OwnerClientId));

@@ -77,24 +77,26 @@ public class NetworkPingMonitor : NetworkBehaviour
 
     private void Awake()
     {
-        if (Instance != null && Instance != this)
-        {
-            // [Fix-1] Destroy(gameObject) → Destroy(this)
-            // gameObject를 파괴하면 다른 플레이어 오브젝트 전체가 사라지는 치명적 버그.
-            Destroy(this);
-            return;
-        }
-        Instance = this;
+        // [Fix-6] 인스턴스는 더 이상 Awake에서 결정하지 않는다.
+        // 클라이언트별로 NetworkPingMonitor가 스폰되며(SpawnWithOwnership),
+        // 서버 프로세스에는 N개의 NetworkPingMonitor가 동시에 존재한다.
+        // 로컬 클라이언트는 자신이 Owner인 한 개만 Instance로 사용해야 RTT 측정이 정확.
+        // → Instance 결정은 OnNetworkSpawn(IsOwner)에서 수행.
     }
 
     public override void OnNetworkSpawn()
     {
         base.OnNetworkSpawn();
+
+        // [Fix-6] Owner(=로컬 클라이언트)만 Instance 등록 + 핑 루틴 시작.
+        // 서버 프로세스에 존재하는 비-Owner 인스턴스들은 RPC 라우팅에만 사용된다.
         if (!IsOwner) return;
+
+        Instance = this;
 
         _pingCts       = new CancellationTokenSource();
         _pingCoroutine = StartCoroutine(PingRoutine());
-        Debug.Log("[PingMonitor] 핑 측정 시작");
+        Debug.Log("[PingMonitor] 핑 측정 시작 (Owner)");
     }
 
     public override void OnNetworkDespawn()

@@ -370,10 +370,18 @@ public class PlayerNetworkSync : NetworkBehaviour
         // PostDamageEffects는 _serverData.currentHp만 수정하므로 ProcessDeath가 호출되지 않았음.
         // 원래 공격 데미지를 타겟에게 적용한 이후에 순차적으로 처리합니다.
         // (공격자가 Thorns로 죽어도 원래 타격은 이미 위에서 타겟에 반영됨)
+        //
+        // [Fix] 기존: targetSync.ProcessDeath(this, ...) 호출.
+        //   FinalizeDeath에서 killer = target._pendingKiller ?? this(=targetSync) 가 되어
+        //   피격자(targetSync)가 Thorns 반사 킬 크레딧을 부당하게 획득.
+        //   부활 미제공 경로에서도 killer = targetSync 로 동일 결과.
+        // 수정: this(공격자) 자신에서 ProcessDeath(this) 호출.
+        //   FinalizeDeath의 `if (killer != target)` 자해 가드에 의해 어느 쪽에도
+        //   킬 카운트가 증가하지 않음 (Thorns 반사는 자해 사망으로 취급).
         if (NetworkHp.Value <= 0f && !NetworkIsDead.Value)
         {
             NetworkIsDead.Value = true;
-            targetSync.ProcessDeath(this, targetFx, attackerFx);
+            this.ProcessDeath(this, attackerFx, targetFx);
         }
     }
 

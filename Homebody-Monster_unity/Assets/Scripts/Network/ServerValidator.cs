@@ -37,6 +37,12 @@ public class ServerValidator : MonoBehaviour
 
     private readonly Dictionary<ulong, PlayerRecord> _records = new();
 
+    // [Fix] 서버 권한 스킬 텔레포트 면제 윈도우(클라이언트 동기화 RTT 흡수용).
+    // ShadowRaid 등 ForcePositionClientRpc 후 ClientNetworkTransform이 새 위치를
+    // 서버에 동기화하기까지 RTT만큼 지연되어 정상 사용자가 텔레포트로 오판정됨.
+    private readonly Dictionary<ulong, float> _skillTeleportUntil = new();
+    private const float SkillTeleportGraceSeconds = 1.0f;
+
     // ════════════════════════════════════════════════════════════
     //  Unity 생명주기
     // ════════════════════════════════════════════════════════════
@@ -85,7 +91,12 @@ public class ServerValidator : MonoBehaviour
         float dt       = Time.time - rec.lastTime;
         float distance = Vector2.Distance(rec.lastPosition, newPosition);
 
-        if (dt > 0f)
+        // [Fix] 서버 권한 스킬 텔레포트(ShadowRaid 등) 면제 처리.
+        // 면제 윈도우 내에서는 위반 카운트를 증가시키지 않고 위치만 갱신.
+        bool skillTpExempt = _skillTeleportUntil.TryGetValue(clientId, out float until)
+                             && Time.time < until;
+
+        if (dt > 0f && !skillTpExempt)
         {
             float speed    = distance / dt;
             bool  teleport = distance > _teleportDist && dt < 0.2f;
@@ -137,6 +148,17 @@ public class ServerValidator : MonoBehaviour
     public void RemovePlayer(ulong clientId)
     {
         _records.Remove(clientId);
+        _skillTeleportUntil.Remove(clientId);
+    }
+
+    /// <summary>
+    /// [Fix] 스킬에 의한 서버 권한 텔레포트를 안티치트에 통보합니다.
+    /// 이후 SkillTeleportGraceSeconds 동안 텔레포트/속도핵 검사를 건너뜁니다.
+    /// SkillSystem.ShadowRaid 등 ForcePositionClientRpc 직전에 호출하세요.
+    /// </summary>
+    public void RegisterSkillTeleport(ulong clientId)
+    {
+        _skillTeleportUntil[clientId] = Time.time + SkillTeleportGraceSeconds;
     }
 
     // ════════════════════════════════════════════════════════════

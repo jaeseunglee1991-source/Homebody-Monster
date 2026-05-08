@@ -179,6 +179,11 @@ public class MatchmakingManager : MonoBehaviour
         NotifyStatus("매칭 서버에 연결 중...");
         await CleanupMyPreviousEntry();
 
+        // [Fix] 이전 큐 항목 DB 반영 대기.
+        // Supabase Realtime이 새 구독 직후 이전 세션의 matched 이벤트를
+        // 재수신하여 즉시 HandleMatchSuccess()가 호출되는 경쟁 조건 방지.
+        await Task.Delay(300);
+
         if (!await InsertQueueEntry())
         {
             isSearching = false;
@@ -359,6 +364,16 @@ public class MatchmakingManager : MonoBehaviour
         {
             await Task.Delay(2000);
             if (!ValidateSupabase()) continue;
+
+            // [Fix] 서버가 InGameScene에 진입한 동안에는 매칭 처리 일시 정지.
+            // 미차단 시 _gameStarted 검사를 통과하기 전 ExecuteServerMatch가
+            // server_assign_match RPC + LoadScene을 트리거하여 진행 중인 매치가 강제 리로드됨.
+            // (MatchmakingManager는 DontDestroyOnLoad 싱글톤이라 인게임 중에도 살아있음.)
+            string activeScene = UnityEngine.SceneManagement
+                .SceneManager.GetActiveScene().name;
+            if (activeScene == "InGameScene" || activeScene == GameManager.SceneResult)
+                continue;
+
             try
             {
                 var queue = await FetchWaitingPlayers();
@@ -440,15 +455,44 @@ public class MatchmakingManager : MonoBehaviour
             };
             await SupabaseManager.Instance.Client.Rpc<string>("server_assign_match", param);
 
-            if (Unity.Netcode.NetworkManager.Singleton != null &&
-                Unity.Netcode.NetworkManager.Singleton.IsServer)
+            // [Fix] InGameScene 진입 전에 NetworkSpawnManager에 매칭 인원 전달.
+            // OnNetworkSpawn에서 expectedPlayerCount로 적용된다.
+            NetworkSpawnManager.PendingExpectedPlayerCount = players.Count;
+
+            var netMgr = Unity.Netcode.NetworkManager.Singleton;
+
+            // [Fix] NGO 서버 생존 여부 확인.
+            // 로컬 데디서버 환경에서 결과 씬 진입 시 잘못 Shutdown된 경우의 fallback.
+            // 출시(분리 서버 프로세스)에서는 항상 IsServer=true이므로 분기 진입 없음.
+            if (netMgr != null && !netMgr.IsServer)
             {
+                Debug.LogWarning("[Server] NGO 서버 비활성 감지 → 재시작 시도");
+                AppNetworkManager.Instance?.StartAsDedicatedServer(port);
+                await Task.Delay(500);
+                netMgr = Unity.Netcode.NetworkManager.Singleton;
+            }
+
+            if (netMgr != null && netMgr.IsServer)
+            {
+                // [Fix] 이미 InGameScene이면 씬 중복 로드 생략.
+                string currentScene = UnityEngine.SceneManagement
+                    .SceneManager.GetActiveScene().name;
+                if (currentScene == "InGameScene")
+                {
+                    Debug.LogWarning("[Server] 이미 InGameScene → 씬 로드 생략");
+                    return;
+                }
+
                 Debug.Log($"[Server] 씬 로드 {sceneLoadDelaySeconds}초 전 대기 중 (클라이언트 접속 대기)...");
                 await Task.Delay((int)(sceneLoadDelaySeconds * 1000));
 
                 Debug.Log("[Server] 🎬 인게임 씬 로드 시작...");
-                Unity.Netcode.NetworkManager.Singleton.SceneManager
-                    .LoadScene("InGameScene", UnityEngine.SceneManagement.LoadSceneMode.Single);
+                netMgr.SceneManager.LoadScene(
+                    "InGameScene", UnityEngine.SceneManagement.LoadSceneMode.Single);
+            }
+            else
+            {
+                Debug.LogError("[Server] NGO 서버 시작 불가 → 씬 전환 중단");
             }
         }
         catch (Exception e) { Debug.LogError($"[Server] 매칭 DB 업데이트 실패: {e.Message}"); }
@@ -511,6 +555,15 @@ public class MatchmakingManager : MonoBehaviour
 
             if (string.IsNullOrEmpty(myPlayerId)) return;
             if (updated == null || updated.PlayerId != myPlayerId) return;
+
+            // [Fix] 현재 세션의 큐 ID와 일치하는지 검증.
+            // 이전 세션의 matched 항목 이벤트가 새 구독 직후 뒤늦게 도달하여
+            // 즉시 HandleMatchSuccess가 호출되는 버그 방지.
+            if (!string.IsNullOrEmpty(myQueueEntryId) && updated.Id != myQueueEntryId)
+            {
+                Debug.LogWarning($"[Matchmaking] 이전 세션 항목 UPDATE 무시: {updated.Id}");
+                return;
+            }
 
             if (updated.Status == "matched" && !string.IsNullOrEmpty(updated.RoomId))
                 HandleMatchSuccess(updated.RoomId);

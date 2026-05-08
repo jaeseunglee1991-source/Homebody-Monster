@@ -110,9 +110,15 @@ public class AppNetworkManager : MonoBehaviour
         // 1. Supabase Presence / 채팅 채널 완전 정리 후 NGO 종료
         await DisconnectLobbyChatAsync();
 
-        if (NetworkManager.Singleton != null &&
-            (NetworkManager.Singleton.IsClient || NetworkManager.Singleton.IsConnectedClient))
-            NetworkManager.Singleton.Shutdown();
+        var netMgr = NetworkManager.Singleton;
+        if (netMgr == null) return;
+
+        // [Fix] 데디케이티드 서버 자신(IsServer && !IsHost)은 Shutdown 대상에서 명시 제외.
+        // (현재 아래 IsClient 분기로 자연 제외되지만 의도를 명시해 향후 회귀 방지)
+        if (netMgr.IsServer && !netMgr.IsHost) return;
+
+        if (netMgr.IsClient || netMgr.IsConnectedClient)
+            netMgr.Shutdown();
     }
 
     /// <summary>

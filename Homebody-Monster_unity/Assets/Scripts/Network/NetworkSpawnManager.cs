@@ -29,8 +29,17 @@ public class NetworkSpawnManager : NetworkBehaviour
     public GameObject pingMonitorPrefab;
 
     [Header("게임 시작 조건")]
-    [Tooltip("예상 접속 인원. MatchmakingManager.maxPlayers와 동일하게 설정.")]
+    [Tooltip("예상 접속 인원. MatchmakingManager.maxPlayers와 동일하게 설정. 매칭 성사 시 PendingExpectedPlayerCount로 런타임 덮어쓰기 됩니다.")]
     public int expectedPlayerCount = 2;
+
+    /// <summary>
+    /// [Fix] 매칭이 성사된 실제 인원수. MatchmakingManager.ExecuteServerMatch가
+    /// LoadScene 직전에 설정하고, OnNetworkSpawn에서 expectedPlayerCount로 적용한다.
+    /// 0 이하면 Inspector 기본값을 그대로 사용.
+    /// 정적 필드를 사용하는 이유: NetworkSpawnManager는 InGameScene 로드 후에만 존재하므로
+    /// MatchmakingManager가 직접 인스턴스에 접근할 수 없다.
+    /// </summary>
+    public static int PendingExpectedPlayerCount = 0;
 
     [Tooltip("접속 대기 타임아웃(초). 초과 시 현재 인원으로 강제 시작.")]
     public float startTimeout = 30f;
@@ -62,6 +71,14 @@ public class NetworkSpawnManager : NetworkBehaviour
         Debug.Log($"[NetworkSpawnManager] OnNetworkSpawn 호출됨 (IsServer: {IsServer})");
         if (!IsServer) return;
 
+        // [Fix] 매칭 성사 인원으로 expectedPlayerCount 덮어쓰기.
+        if (PendingExpectedPlayerCount > 0)
+        {
+            Debug.Log($"[NetworkSpawnManager] expectedPlayerCount {expectedPlayerCount} → {PendingExpectedPlayerCount} (매칭 성사 인원)");
+            expectedPlayerCount = PendingExpectedPlayerCount;
+            PendingExpectedPlayerCount = 0; // 다음 매치를 위해 초기화
+        }
+
         NetworkManager.Singleton.OnClientConnectedCallback  += HandleClientConnected;
         NetworkManager.Singleton.OnClientDisconnectCallback += HandleClientDisconnected;
 
@@ -70,19 +87,10 @@ public class NetworkSpawnManager : NetworkBehaviour
             Debug.LogWarning("[NetworkSpawnManager] ⚠ PingAdaptiveCombat이 씬에 없습니다. " +
                              "InGameScene Hierarchy에 GameObject를 추가하고 컴포넌트를 붙이세요.");
 
-        // [D] NetworkPingMonitor 프리팹 스폰
-        if (pingMonitorPrefab != null)
-        {
-            var pingObj = Instantiate(pingMonitorPrefab);
-            pingObj.GetComponent<Unity.Netcode.NetworkObject>()
-                   .Spawn(destroyWithScene: true);
-            Debug.Log("[NetworkSpawnManager] ✅ NetworkPingMonitor 스폰 완료");
-        }
-        else
-        {
-            Debug.LogWarning("[NetworkSpawnManager] ⚠ pingMonitorPrefab이 할당되지 않았습니다. " +
-                             "Inspector에서 PingMonitor_Host 프리팹을 연결하세요.");
-        }
+        // [Fix-6] 글로벌 단일 PingMonitor 스폰 제거.
+        //   기존: 서버가 단일 NetworkObject를 Spawn() → 서버가 Owner가 되어
+        //         IsOwner=true인 PingRoutine이 서버에서만 동작 → 클라이언트 RTT 미수집.
+        //   수정: 클라이언트별로 SpawnPlayer()에서 SpawnWithOwnership(clientId) 한다.
 
         Debug.Log($"[NetworkSpawnManager] ☁️ 서버 준비. {expectedPlayerCount}명 대기 시작.");
         StartCoroutine(WaitForPlayersRoutine());
@@ -165,6 +173,24 @@ public class NetworkSpawnManager : NetworkBehaviour
 
         // 클라이언트에게 소유권 부여 (씬 전환 시 자동 제거)
         netObj.SpawnAsPlayerObject(clientId, destroyWithScene: true);
+
+        // [Fix-6] 클라이언트별 NetworkPingMonitor 스폰 (해당 클라이언트가 Owner).
+        // 서버는 비-Owner 인스턴스로서 RPC만 라우팅하고, 측정은 각 클라이언트에서 수행한다.
+        if (pingMonitorPrefab != null)
+        {
+            var pingObj    = Instantiate(pingMonitorPrefab);
+            var pingNetObj = pingObj.GetComponent<NetworkObject>();
+            if (pingNetObj != null)
+            {
+                pingNetObj.SpawnWithOwnership(clientId, destroyWithScene: true);
+                Debug.Log($"[NetworkSpawnManager] PingMonitor 스폰 (owner clientId={clientId})");
+            }
+            else
+            {
+                Debug.LogError("[NetworkSpawnManager] pingMonitorPrefab에 NetworkObject 없음");
+                Destroy(pingObj);
+            }
+        }
 
         var sync = obj.GetComponent<PlayerNetworkSync>();
         if (sync != null)

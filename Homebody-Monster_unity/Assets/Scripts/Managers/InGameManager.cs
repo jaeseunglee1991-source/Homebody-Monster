@@ -128,7 +128,9 @@ public class InGameManager : MonoBehaviour
                 InGameHUD.Instance.UpdateTimer(remaining);
 
                 // 0초 도달 시 게임 종료
-                if (remaining <= 0f && !gameEnded)
+                // [Fix] timeLimitSeconds == 0 은 "무제한" 의미. 가드 없이는 게임 시작 직후
+                // remaining=0이 되어 즉시 FinishGame이 호출되는 치명 버그가 발생한다.
+                if (timeLimitSeconds > 0f && remaining <= 0f && !gameEnded)
                 {
                     gameEnded = true;
                     // 시간 초과 시 생존자 중 HP가 가장 높은 플레이어를 승자로 처리
@@ -454,6 +456,31 @@ public class InGameManager : MonoBehaviour
         }
 
         yield return new WaitForSeconds(3f);
+
+        // [Fix] 시간 제한 종료 시 다수 생존자 rank 중복 계산 버그.
+        // 기존: 사망 미기록 생존자는 모두 fallback `alivePlayers.Count + 1` 동일 값 부여.
+        // 수정: 승자 외 생존자(HP > 0, NetworkIsDead=false)를 NetworkHp 내림차순 정렬해
+        //       2위, 3위, ...를 _playerFinalRanks에 직접 기록.
+        if (winner != null && alivePlayers.Count > 1)
+        {
+            var ranked = new List<PlayerController>();
+            foreach (var p in alivePlayers)
+            {
+                if (p == null || p == winner || p.networkSync == null) continue;
+                ranked.Add(p);
+            }
+            ranked.Sort((a, b) =>
+                b.networkSync.NetworkHp.Value.CompareTo(a.networkSync.NetworkHp.Value));
+
+            int rankCursor = 2;
+            foreach (var p in ranked)
+            {
+                ulong cid = p.networkSync.OwnerClientId;
+                if (!_playerFinalRanks.ContainsKey(cid))
+                    _playerFinalRanks[cid] = rankCursor;
+                rankCursor++;
+            }
+        }
 
         // ── 각 클라이언트에게 본인의 결과 전달 ──────────────────────
         // • 데디케이티드 서버: IsOwner 플레이어 없음 → 서버에서 계산 불가
