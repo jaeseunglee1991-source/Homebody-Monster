@@ -189,7 +189,10 @@ public class PlayerNetworkSync : NetworkBehaviour
 
         // [FEATURE] 서버 측 안티치트 기록 정리
         if (IsServer)
+        {
             ServerValidator.Instance?.RemovePlayer(OwnerClientId);
+            PingAdaptiveCombat.Instance?.RemovePlayer(OwnerClientId); // Fix-13
+        }
 
         base.OnNetworkDespawn();
     }
@@ -567,6 +570,7 @@ public class PlayerNetworkSync : NetworkBehaviour
         _isProcessingRevive = false;
         _pendingKiller      = null;
         CancelAndDisposeCts();
+        _skillLastUsed.Clear(); // 스킬 쿨다운 초기화
     }
 
     // ════════════════════════════════════════════════════════════
@@ -1241,6 +1245,21 @@ public class PlayerNetworkSync : NetworkBehaviour
     // ════════════════════════════════════════════════════════════
     //  직렬화 유틸
     // ════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// 리롤 후 새 캐릭터 데이터를 서버에 재제출합니다.
+    /// CharacterRerollSystem에서 Owner 클라이언트 측으로 호출됩니다.
+    /// </summary>
+    public void ResubmitCharacterData()
+    {
+        if (!IsOwner) return;
+        var netData  = BuildNetworkData();
+        var nickname = new Unity.Collections.FixedString64Bytes(
+            GameManager.Instance?.currentPlayerNickname ?? "");
+        var userId   = new Unity.Collections.FixedString64Bytes(
+            GameManager.Instance?.currentPlayerId ?? "");
+        SubmitCharacterDataServerRpc(netData, nickname, userId);
+    }
 
     private NetworkCharacterData BuildNetworkData()
     {

@@ -275,7 +275,9 @@ public class NetworkSpawnManager : NetworkBehaviour
     private void BeginGameClientRpc(int totalPlayers)
     {
         Debug.Log($"[NetworkSpawnManager] 🚀 게임 시작! 총 {totalPlayers}명");
+        InGameManager.Instance?.SetGameStartPlayerCount(totalPlayers);
         InGameHUD.Instance?.SetGameStarted(totalPlayers);
+        CharacterRerollSystem.Instance?.OpenRerollWindow();
     }
 
     /// <summary>서버 → 클라이언트: 카운트다운 메시지를 HUD 배너에 표시합니다.</summary>

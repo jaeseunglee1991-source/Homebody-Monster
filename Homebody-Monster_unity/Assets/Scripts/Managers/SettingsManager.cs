@@ -126,4 +126,14 @@ public class SettingsManager : MonoBehaviour
     {
         PlayerPrefs.Save();
     }
+
+    private void OnApplicationPause(bool pauseStatus)
+    {
+        if (pauseStatus) PlayerPrefs.Save();
+    }
+
+    private void OnApplicationQuit()
+    {
+        PlayerPrefs.Save();
+    }
 }

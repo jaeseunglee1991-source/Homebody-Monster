@@ -95,6 +95,17 @@ public class PingHUD : MonoBehaviour
         if (Instance == this) Instance = null;
     }
 
+    // [Fix-12] NetworkPingMonitor가 플레이어 스폰 후 늦게 생성될 수 있으므로
+    // 구독 미완료 상태라면 매 프레임 재시도 후 즉시 값을 동기화합니다.
+    private void Update()
+    {
+        if (!_subscribed)
+        {
+            TrySubscribe();
+            if (_subscribed) ForceRefresh();
+        }
+    }
+
     // ════════════════════════════════════════════════════════════
     //  구독 관리
     // ════════════════════════════════════════════════════════════

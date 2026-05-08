@@ -174,8 +174,9 @@ public class LobbyUIController : MonoBehaviour
             // GameManager 캐시 업데이트
             if (GameManager.Instance != null)
             {
-                GameManager.Instance.currentPlayerNickname = profile.Nickname; // 채팅용 닉네임 저장
-                GameManager.Instance.reviveTicketCount = profile.ReviveTicketCount;
+                GameManager.Instance.currentPlayerNickname = profile.Nickname;
+                GameManager.Instance.reviveTicketCount     = profile.ReviveTicketCount;
+                GameManager.Instance.pizzaCount            = profile.PizzaCount;
             }
 
             // 설정 패널이 열려 있으면 계정 표시 최신화 (LobbySettingsPanel 연동)

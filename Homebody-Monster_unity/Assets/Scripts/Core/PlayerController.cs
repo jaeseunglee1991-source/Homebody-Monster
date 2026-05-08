@@ -221,6 +221,8 @@ public class PlayerController : NetworkBehaviour
             return;
         }
 
+        if (myData == null) return;
+
         float spd = StatCalculator.GetEffectiveMoveSpeed(myData, StatusFX);
         // [버그 수정] 이동 처리에도 IsStealthy 체크 추가 (ChaseAndAttack과 동일 패턴).
         // ChaseAndAttack 코루틴이 yield return null 직후 체크하기 전에

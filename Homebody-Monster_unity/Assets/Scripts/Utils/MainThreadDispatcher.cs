@@ -47,15 +47,21 @@ public class MainThreadDispatcher : MonoBehaviour
         }
     }
 
+    private readonly List<Action> _pending = new List<Action>();
+
     private void Update()
     {
         lock (_lock)
         {
             while (_actions.Count > 0)
-            {
-                try { _actions.Dequeue()?.Invoke(); }
-                catch (Exception e) { Debug.LogError($"[MainThreadDispatcher] 오류: {e.Message}"); }
-            }
+                _pending.Add(_actions.Dequeue());
         }
+
+        for (int i = 0; i < _pending.Count; i++)
+        {
+            try { _pending[i]?.Invoke(); }
+            catch (Exception e) { Debug.LogError($"[MainThreadDispatcher] 오류: {e.Message}"); }
+        }
+        _pending.Clear();
     }
 }
