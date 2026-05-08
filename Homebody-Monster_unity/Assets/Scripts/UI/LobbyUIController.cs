@@ -178,6 +178,9 @@ public class LobbyUIController : MonoBehaviour
                 GameManager.Instance.reviveTicketCount = profile.ReviveTicketCount;
             }
 
+            // 설정 패널이 열려 있으면 계정 표시 최신화 (LobbySettingsPanel 연동)
+            LobbySettingsPanel.Instance?.OnProfileRefreshed();
+
             // Supabase Presence 등록 — 닉네임 확보 후 호출해야 올바른 식별자로 등록됨
             AppNetworkManager.Instance?.TrackLobbyPresence(profile.Nickname);
         }
