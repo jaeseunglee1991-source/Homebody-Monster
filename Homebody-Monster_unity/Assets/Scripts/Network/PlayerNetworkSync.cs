@@ -77,6 +77,14 @@ public class PlayerNetworkSync : NetworkBehaviour
     // [FIX] 이동 방향 동기화 — 다른 클라이언트 캐릭터 flipX 갱신용.
     // ClientNetworkTransform이 위치를 동기화하지만 moveDir은 동기화하지 않아
     // 다른 플레이어가 왼쪽으로 이동해도 스프라이트가 뒤집히지 않는 버그 수정.
+    // [외형 동기화] 직업 인덱스 — JobVisualRegistry 룩업용.
+    // -1 = 미설정 (SubmitCharacterDataServerRpc 도달 전).
+    // 서버 권한 — 클라이언트 위변조 차단 + 서버 검증 통과한 직업만 브로드캐스트.
+    // OnValueChanged 는 Despawn 후엔 발동 안 되므로 PlayerController 가 OnNetworkSpawn 에서
+    // 현재 값을 즉시 한번 읽고 + 구독한다 (late join / 재접속 대응).
+    public readonly NetworkVariable<int> NetworkJob = new(
+        -1, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
     public readonly NetworkVariable<Vector2> NetworkMoveDir = new(
         Vector2.zero,
         NetworkVariableReadPermission.Everyone,
@@ -263,6 +271,9 @@ public class PlayerNetworkSync : NetworkBehaviour
         NetworkNickname.Value  = nickname;
         NetworkHp.Value        = _serverData.maxHp;
         NetworkMaxHp.Value     = _serverData.maxHp;
+        // [외형 동기화] 검증된 직업을 모든 클라이언트에 브로드캐스트.
+        // PlayerController.OnJobValueChanged 가 수신하여 UpdateVisualByJob 호출.
+        NetworkJob.Value       = (int)_serverData.job;
 
         // [FIX] Regeneration 패시브 NetworkHp 미갱신 버그 수정.
         // CombatSystem.RegenerationRoutine은 data.currentHp만 수정하고 NetworkHp.Value를 갱신하지 않아

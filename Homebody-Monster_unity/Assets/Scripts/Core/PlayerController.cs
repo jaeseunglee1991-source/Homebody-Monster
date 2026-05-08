@@ -94,14 +94,76 @@ public class PlayerController : NetworkBehaviour
             // 동적 스폰 시 씬에 배치된 조이스틱을 자동으로 연결
             if (movementJoystick == null)
                 movementJoystick = FindFirstObjectByType<VariableJoystick>();
+
+            // [외형 동기화] Owner 는 본인 직업을 이미 알고 있으므로
+            // SubmitCharacterDataServerRpc 라운드트립 대기 없이 즉시 적용 → 깜빡임 제거.
+            if (GameManager.Instance?.myCharacterData != null)
+                UpdateVisualByJob((int)GameManager.Instance.myCharacterData.job);
+        }
+
+        // [외형 동기화] 모든 클라이언트(Owner 포함)에서 NetworkJob 구독.
+        // Late join 또는 재접속 시 OnValueChanged 가 발동되지 않을 수 있으므로
+        // 현재 값이 유효(-1 아님)하면 즉시 한 번 적용한다.
+        if (networkSync != null)
+        {
+            networkSync.NetworkJob.OnValueChanged += OnNetworkJobChanged;
+            int currentJob = networkSync.NetworkJob.Value;
+            if (currentJob >= 0) UpdateVisualByJob(currentJob);
         }
     }
 
     public override void OnNetworkDespawn()
     {
         base.OnNetworkDespawn();
+        if (networkSync != null)
+            networkSync.NetworkJob.OnValueChanged -= OnNetworkJobChanged;
+
         if (IsOwner)
             UnityEngine.InputSystem.EnhancedTouch.EnhancedTouchSupport.Disable();
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  외형 교체 (직업별)
+    //  Owner: SubmitCharacterDataServerRpc 직전 즉시 호출
+    //  Non-Owner: NetworkJob.OnValueChanged 콜백으로 호출
+    // ════════════════════════════════════════════════════════════
+
+    private void OnNetworkJobChanged(int prev, int curr)
+    {
+        if (curr < 0) return;             // 미설정 상태 무시
+        UpdateVisualByJob(curr);
+    }
+
+    public void UpdateVisualByJob(int jobIndex)
+    {
+        // 데디케이티드 서버(헤드리스) 는 시각 처리 불필요.
+        // IsServer && !IsClient 일 때만 스킵 — listen-server(Host)는 클라이언트 역할도 하므로 진행.
+        if (NetworkManager.Singleton != null
+            && NetworkManager.Singleton.IsServer
+            && !NetworkManager.Singleton.IsClient)
+            return;
+
+        // jobIndex 범위 검증 (enum 값이 0~9, -1 은 미설정)
+        if (jobIndex < 0 || jobIndex > (int)JobType.Chef) return;
+
+        // Despawn 직후 콜백 도달 가능 → 컴포넌트 null 가드
+        if (animator == null && spriteRenderer == null) return;
+
+        var registry = JobVisualRegistry.Instance;
+        if (registry == null) return; // 워닝은 Instance getter 에서 1회 출력
+
+        var visual = registry.GetVisual((JobType)jobIndex);
+        if (visual == null) return;   // 등록 안 된 직업은 기본 외형 유지 (정상 동작)
+
+        if (animator != null && visual.animatorController != null)
+        {
+            animator.runtimeAnimatorController = visual.animatorController;
+            // Controller 교체 시 현재 재생 상태가 무효화되므로 Idle 첫 프레임으로 리셋
+            animator.Rebind();
+            animator.Update(0f);
+        }
+        if (spriteRenderer != null && visual.defaultIdleSprite != null)
+            spriteRenderer.sprite = visual.defaultIdleSprite;
     }
 
     private void Start()
