@@ -9,30 +9,33 @@ using UnityEngine;
 /// <summary>
 /// 인게임 실시간 네트워크 품질 모니터.
 ///
-/// ServerRpc ↔ ClientRpc 왕복으로 실제 체감 RTT를 측정합니다.
-/// NGO UnityTransport.GetCurrentRtt()는 UDP 레이어 RTT만 반환하며
-/// 게임 로직 처리 지연을 포함하지 않아 체감과 다릅니다.
+/// ─ 배치 방법 ──────────────────────────────────────────────────
+///  Player 프리팹(PlayerNetworkSync, PlayerController와 동일 오브젝트)에 추가합니다.
+///  NetworkSpawnManager.SpawnAsPlayerObject(clientId)로 스폰되므로
+///  각 클라이언트는 자신의 Player 오브젝트에서 IsOwner=true가 됩니다.
+///  IsOwner=true인 클라이언트에서만 PingRoutine이 시작됩니다.
 ///
-/// [배치] InGameScene에 별도 NetworkObject 프리팹(PingMonitor_Host)을 만들고
-/// NetworkSpawnManager.OnNetworkSpawn() 서버 분기에서 스폰합니다.
-/// Player 프리팹에 붙이면 안 됩니다 (Fix-1 참고).
+///  ※ 별도 NetworkObject 프리팹으로 서버가 Spawn()하면 서버가 Owner가 되어
+///    모든 클라이언트에서 IsOwner=false → PingRoutine 미시작 (Fix-16)
 ///
-/// Fix-1  Awake Destroy(gameObject) → Destroy(this) : 다른 플레이어 오브젝트 전체 파괴 방지
-/// Fix-2  _pendingPings Queue 메모리 누수 제거 : _sendTimes Dictionary로 완결
-/// Fix-3  PingTimeoutRoutine 고아 코루틴 : CancellationToken으로 Despawn 즉시 종료
-/// Fix-4  SaveSessionPingAsync async void → async Task + CancellationToken : 씬 전환 NPE 방지
-/// Fix-5  SmoothedRttMs 초기값(0) 전달 방지 : rttHint > 0일 때만 UpdateClientRtt 호출
+/// Fix-1  Awake 싱글톤 등록 → OnNetworkSpawn(IsOwner)으로 이동
+/// Fix-2  _pendingPings Queue 메모리 누수 제거 → _sendTimes Dictionary로 완결
+/// Fix-3  PingTimeoutRoutine 고아 코루틴 → CancellationToken으로 즉시 종료
+/// Fix-4  SaveSessionPingAsync async void → async Task + CancellationToken
+/// Fix-5  SmoothedRttMs 초기값(0) rttHint=0 전달 방지
+/// Fix-16 [CRITICAL] 서버 Spawn 방식 → Player 프리팹에 붙이는 방식으로 재설계
 /// </summary>
-[RequireComponent(typeof(NetworkObject))]
+[DisallowMultipleComponent]
 public class NetworkPingMonitor : NetworkBehaviour
 {
+    // [Fix-1][Fix-16] OnNetworkSpawn에서 IsOwner=true인 경우에만 등록
     public static NetworkPingMonitor Instance { get; private set; }
 
     public enum NetworkQuality { Excellent, Good, Poor, Critical }
 
     // ── Inspector ───────────────────────────────────────────────
     [Header("측정 설정")]
-    [Range(0.3f, 5f)] public float sampleInterval  = 0.5f;
+    [Range(0.3f, 5f)] public float sampleInterval   = 0.5f;
     [Range(3, 20)]    public int   smoothingSamples = 8;
     [Range(1f, 5f)]   public float pingTimeout      = 2f;
 
@@ -42,7 +45,7 @@ public class NetworkPingMonitor : NetworkBehaviour
     public int thresholdPoor      = 200;
 
     [Header("고핑 경고")]
-    public int highPingWarningMs                   = 150;
+    public int                highPingWarningMs    = 150;
     [Range(2, 10)] public int highPingWarningCount = 3;
 
     // ── 공개 프로퍼티 ────────────────────────────────────────────
@@ -66,40 +69,36 @@ public class NetworkPingMonitor : NetworkBehaviour
     private float _sessionPingSum   = 0f;
     private int   _sessionPingCount = 0;
 
-    private Coroutine             _pingCoroutine;
-    private CancellationTokenSource _pingCts; // [Fix-3] 핑 측정 코루틴 즉시 종료용 — Despawn 시 취소
-    private CancellationTokenSource _saveCts; // [Fix-4] 저장 Task용 — OnDestroy에서 취소하지 않음
-    private Task                    _saveTask; // 저장 Task 참조 보관 — GC 조기 수집 방지
+    private Coroutine               _pingCoroutine;
+    private CancellationTokenSource _pingCts;
+    private CancellationTokenSource _saveCts;
 
     // ════════════════════════════════════════════════════════════
-    //  Unity 생명주기
+    //  NGO 생명주기
     // ════════════════════════════════════════════════════════════
-
-    private void Awake()
-    {
-        if (Instance != null && Instance != this)
-        {
-            // [Fix-1] Destroy(gameObject) → Destroy(this)
-            // gameObject를 파괴하면 다른 플레이어 오브젝트 전체가 사라지는 치명적 버그.
-            Destroy(this);
-            return;
-        }
-        Instance = this;
-    }
 
     public override void OnNetworkSpawn()
     {
         base.OnNetworkSpawn();
+
+        // [Fix-1][Fix-16] IsOwner=true인 로컬 플레이어 인스턴스만 Instance에 등록
         if (!IsOwner) return;
 
+        if (Instance != null && Instance != this)
+        {
+            Debug.LogWarning("[PingMonitor] 이미 로컬 Instance가 존재합니다. 이 인스턴스는 측정하지 않습니다.");
+            return;
+        }
+
+        Instance = this;
         _pingCts       = new CancellationTokenSource();
         _pingCoroutine = StartCoroutine(PingRoutine());
-        Debug.Log("[PingMonitor] 핑 측정 시작");
+        Debug.Log("[PingMonitor] 핑 측정 시작 (로컬 플레이어)");
     }
 
     public override void OnNetworkDespawn()
     {
-        // [Fix-3] CTS 취소 → 모든 하위 코루틴(PingTimeoutRoutine 포함) 즉시 종료
+        // [Fix-3] 코루틴 일괄 종료
         _pingCts?.Cancel();
         _pingCts?.Dispose();
         _pingCts = null;
@@ -110,28 +109,25 @@ public class NetworkPingMonitor : NetworkBehaviour
             _pingCoroutine = null;
         }
 
-        // [Fix-4] 저장 Task: 이전 CTS 정리 후 새로 생성해 Task 시작.
-        // _saveTask 참조를 보관해 GC 조기 수집을 방지한다.
-        // OnDestroy에서는 _saveCts를 취소하지 않음 — Supabase 왕복 완료 전 취소 방지.
-        _saveCts?.Cancel();
-        _saveCts?.Dispose();
-        _saveCts  = new CancellationTokenSource();
-        _saveTask = SaveSessionPingAsync(_saveCts.Token);
+        // [Fix-4] 세션 핑 저장 (씬 전환 전 안전 실행)
+        if (IsOwner)
+        {
+            _saveCts?.Cancel();
+            _saveCts?.Dispose();
+            _saveCts = new CancellationTokenSource();
+            _ = SaveSessionPingAsync(_saveCts.Token);
+        }
 
         if (Instance == this) Instance = null;
 
         base.OnNetworkDespawn();
     }
 
-    private new void OnDestroy()
+    private void OnDestroy()
     {
-        _pingCts?.Cancel();
-        _pingCts?.Dispose();
-        _pingCts = null;
-        // _saveCts는 여기서 취소하지 않음.
-        // OnNetworkDespawn에서 시작한 SaveSessionPingAsync가 Supabase 왕복(수백ms)
-        // 완료 전에 취소되면 세션 핑 데이터가 DB에 저장되지 않는 버그 발생.
-        // Task 완료 후 _saveCts / _saveTask는 GC가 자연 수집한다.
+        _pingCts?.Cancel(); _pingCts?.Dispose();
+        _saveCts?.Cancel(); _saveCts?.Dispose();
+        if (Instance == this) Instance = null;
     }
 
     // ════════════════════════════════════════════════════════════
@@ -141,7 +137,6 @@ public class NetworkPingMonitor : NetworkBehaviour
     private IEnumerator PingRoutine()
     {
         var wait = new WaitForSecondsRealtime(sampleInterval);
-
         while (true)
         {
             yield return wait;
@@ -153,10 +148,9 @@ public class NetworkPingMonitor : NetworkBehaviour
             ulong seq = _pingSeq++;
             _sendTimes[seq] = Time.realtimeSinceStartup;
 
-            // [Fix-3] 토큰 전달로 Despawn 후 고아 코루틴 방지
             StartCoroutine(PingTimeoutRoutine(seq, _pingCts.Token));
 
-            // [Fix-5] rttHint로 SmoothedRttMs 전달 (0이면 서버에서 무시)
+            // [Fix-5] SmoothedRttMs=0(초기값)이면 서버에서 무시
             PingServerRpc(seq, SmoothedRttMs);
         }
     }
@@ -188,13 +182,13 @@ public class NetworkPingMonitor : NetworkBehaviour
 
     /// <summary>
     /// 클라이언트 → 서버 핑 전송.
-    /// rttHint: 현재 SmoothedRttMs를 함께 보내 PingAdaptiveCombat 서버 캐시를 갱신합니다.
-    /// [Fix-5] rttHint == 0(아직 샘플 없음)이면 UpdateClientRtt 호출을 생략합니다.
+    /// rttHint: SmoothedRttMs를 함께 보내 PingAdaptiveCombat 서버 캐시를 갱신합니다.
+    /// [Fix-5] rttHint=0(초기값)이면 UpdateClientRtt를 생략합니다.
     /// </summary>
     [ServerRpc]
     private void PingServerRpc(ulong seq, int rttHint, ServerRpcParams rpcParams = default)
     {
-        // [Fix-5] 0은 초기값 → 아직 샘플 없음 → UpdateClientRtt 생략
+        // [Fix-5] 0은 초기값 — 아직 샘플 없음
         if (rttHint > 0)
             PingAdaptiveCombat.Instance?.UpdateClientRtt(
                 rpcParams.Receive.SenderClientId, rttHint);
@@ -241,7 +235,6 @@ public class NetworkPingMonitor : NetworkBehaviour
 
         CurrentRttMs  = rttMs;
         SmoothedRttMs = total / _rttSamples.Count;
-
         _sessionPingSum   += rttMs;
         _sessionPingCount++;
 
@@ -279,7 +272,7 @@ public class NetworkPingMonitor : NetworkBehaviour
 
     /// <summary>
     /// [Fix-4] async void → async Task + CancellationToken.
-    /// 씬 전환 중 SupabaseManager가 Destroy된 후 await 재개 시 NPE 방지.
+    /// 씬 전환 중 SupabaseManager Destroy 후 await 재개 시 NPE 방지.
     /// </summary>
     private async Task SaveSessionPingAsync(CancellationToken token)
     {
@@ -293,7 +286,6 @@ public class NetworkPingMonitor : NetworkBehaviour
         try
         {
             await SupabaseManager.Instance.SaveSessionPing(roomId, avgPing, PacketLossRate);
-
             if (!token.IsCancellationRequested)
                 Debug.Log($"[PingMonitor] 세션 핑 저장: {avgPing}ms / 손실 {PacketLossRate:P0}");
         }

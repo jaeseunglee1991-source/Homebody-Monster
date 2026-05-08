@@ -23,6 +23,7 @@ public class GameManager : MonoBehaviour
     public string currentPlayerNickname; // 채팅 표시용 닉네임
     public CharacterData myCharacterData;
     public int reviveTicketCount = 0;
+    public int pizzaCount        = 0;
 
     [Header("Match Info")]
     public string currentRoomId;        // 매칭된 방 식별자 ("ip:port" 형태)

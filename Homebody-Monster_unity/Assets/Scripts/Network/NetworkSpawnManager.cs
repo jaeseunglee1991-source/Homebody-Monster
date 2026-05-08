@@ -64,20 +64,6 @@ public class NetworkSpawnManager : NetworkBehaviour
             Debug.LogWarning("[NetworkSpawnManager] ⚠ PingAdaptiveCombat이 씬에 없습니다. " +
                              "InGameScene Hierarchy에 GameObject를 추가하고 컴포넌트를 붙이세요.");
 
-        // [D] NetworkPingMonitor 프리팹 스폰
-        if (pingMonitorPrefab != null)
-        {
-            var pingObj = Instantiate(pingMonitorPrefab);
-            pingObj.GetComponent<Unity.Netcode.NetworkObject>()
-                   .Spawn(destroyWithScene: true);
-            Debug.Log("[NetworkSpawnManager] ✅ NetworkPingMonitor 스폰 완료");
-        }
-        else
-        {
-            Debug.LogWarning("[NetworkSpawnManager] ⚠ pingMonitorPrefab이 할당되지 않았습니다. " +
-                             "Inspector에서 PingMonitor_Host 프리팹을 연결하세요.");
-        }
-
         Debug.Log($"[NetworkSpawnManager] ☁️ 서버 준비. {expectedPlayerCount}명 대기 시작.");
         StartCoroutine(WaitForPlayersRoutine());
     }
@@ -234,7 +220,9 @@ public class NetworkSpawnManager : NetworkBehaviour
     private void BeginGameClientRpc(int totalPlayers)
     {
         Debug.Log($"[NetworkSpawnManager] 🚀 게임 시작! 총 {totalPlayers}명");
+        InGameManager.Instance?.SetGameStartPlayerCount(totalPlayers);
         InGameHUD.Instance?.SetGameStarted(totalPlayers);
+        CharacterRerollSystem.Instance?.OpenRerollWindow();
     }
 
     /// <summary>서버 → 클라이언트: 카운트다운 메시지를 HUD 배너에 표시합니다.</summary>

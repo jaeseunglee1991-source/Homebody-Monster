@@ -217,11 +217,11 @@ public class InGameHUD : MonoBehaviour
         timerText.text = $"{(int)(elapsed / 60f):00}:{(int)(elapsed % 60f):00}";
     }
 
-    public void ShowGameEndBanner(string message)
+    public void ShowGameEndBanner(string message, bool playResultBGM = false)
     {
         if (endBannerPanel != null) endBannerPanel.SetActive(true);
         if (endBannerText  != null) endBannerText.text = message;
-        AudioManager.Instance?.PlayResultBGM();
+        if (playResultBGM) AudioManager.Instance?.PlayResultBGM();
     }
 
     public void SetGameStarted(int totalPlayers)

@@ -16,6 +16,10 @@ public class NetworkProjectile : NetworkBehaviour
     public int maxPierceCount = 1;
     public GameObject hitEffectPrefab;
 
+    [Header("히트 이펙트 설정")]
+    [Tooltip("자동 소멸 시간(초). 0이면 소멸 안 함.")]
+    public float hitEffectLifetime = 1.5f;
+
     private float _damage;
     private ActiveSkillType _skillType;
     private PlayerNetworkSync _ownerSync;
@@ -145,8 +149,10 @@ public class NetworkProjectile : NetworkBehaviour
     [ClientRpc]
     private void SpawnHitEffectClientRpc(Vector2 position)
     {
-        if (hitEffectPrefab != null)
-            Instantiate(hitEffectPrefab, position, Quaternion.identity);
+        if (hitEffectPrefab == null) return;
+        GameObject fx = Instantiate(hitEffectPrefab, position, Quaternion.identity);
+        if (hitEffectLifetime > 0f)
+            Destroy(fx, hitEffectLifetime);
     }
 
     private void DespawnProjectile()

@@ -172,7 +172,7 @@ public class LoadingScreenManager : MonoBehaviour
         while (!op.isDone)
         {
             float targetProgress = Mathf.Clamp01(op.progress / 0.9f);
-            displayProgress = Mathf.MoveTowards(displayProgress, targetProgress, fillSpeed * Time.deltaTime);
+            displayProgress = Mathf.MoveTowards(displayProgress, targetProgress, fillSpeed * Time.unscaledDeltaTime);
             UpdateProgressUI(displayProgress);
 
             if (op.progress >= 0.9f)
@@ -180,14 +180,14 @@ public class LoadingScreenManager : MonoBehaviour
                 // UI를 100%로 채우는 짧은 연출
                 while (displayProgress < 1f)
                 {
-                    displayProgress = Mathf.MoveTowards(displayProgress, 1f, fillSpeed * Time.deltaTime);
+                    displayProgress = Mathf.MoveTowards(displayProgress, 1f, fillSpeed * Time.unscaledDeltaTime);
                     UpdateProgressUI(displayProgress);
                     yield return null;
                 }
 
                 if (autoActivate)
                 {
-                    yield return new WaitForSeconds(autoActivateDelay);
+                    yield return new WaitForSecondsRealtime(autoActivateDelay);
                     _pendingScene = null;
                     op.allowSceneActivation = true;
                 }

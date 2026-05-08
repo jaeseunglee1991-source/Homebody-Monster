@@ -73,6 +73,9 @@ public class DamagePopup : MonoBehaviour
         }
 
         _animRoutine = null;
-        DamagePopupPool.Instance.Release(this);
+        if (DamagePopupPool.Instance != null)
+            DamagePopupPool.Instance.Release(this);
+        else
+            gameObject.SetActive(false);
     }
 }

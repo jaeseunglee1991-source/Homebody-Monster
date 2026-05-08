@@ -98,12 +98,14 @@ public class ServerValidator : MonoBehaviour
                 rec.violationCount++;
 
                 sync.ForcePositionClientRpc(rec.lastPosition);
+                _records[clientId] = rec; // struct 복사본을 딕셔너리에 즉시 저장
 
                 if (rec.violationCount >= _kickThreshold)
                 {
                     _ = BanAndKickAsync(clientId, sync, type);
                     return;
                 }
+                return; // 위반 시 lastPosition/lastTime 갱신하지 않음
             }
         }
 

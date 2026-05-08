@@ -35,6 +35,21 @@ public class InGameManager : MonoBehaviour
 
     public bool isGameActive { get; private set; } = false;
 
+    /// <summary>
+    /// 실제로 매치에 참가한 시작 인원 수.
+    /// NetworkSpawnManager.BeginGameClientRpc → SetGameStartPlayerCount() 로 설정.
+    /// 0이면 maxPlayers를 fallback으로 사용 (Start 직후 초기 표시용).
+    /// </summary>
+    public int GameStartPlayerCount { get; private set; } = 0;
+
+    /// <summary>서버 → 모든 클라이언트로 게임 시작 시 실제 시작 인원을 동기화합니다.</summary>
+    public void SetGameStartPlayerCount(int count)
+    {
+        GameStartPlayerCount = count;
+        if (InGameHUD.Instance != null)
+            InGameHUD.Instance.UpdateSurvivorCount(alivePlayers.Count, count);
+    }
+
     // ── 부활권 관련 상태 ────────────────────────────────────────
     /// <summary>이번 매치에서 지금까지 사용된 부활 횟수 (전체 플레이어 합산, 최대 3회)</summary>
     public int MatchReviveUsedCount { get; private set; } = 0;
@@ -131,6 +146,11 @@ public class InGameManager : MonoBehaviour
                 CleanUpDisconnectedPlayers();
             }
         }
+        else if (!gameEnded && InGameHUD.Instance != null)
+        {
+            // 게임 시작 전 타이머를 00:00으로 유지 (카운트다운 문자열 덮어쓰기 방지)
+            InGameHUD.Instance.UpdateTimer(0f);
+        }
     }
 
     public void RegisterPlayer(PlayerController player)
@@ -140,7 +160,13 @@ public class InGameManager : MonoBehaviour
 
         Debug.Log($"[InGameManager] 플레이어 등록 완료: {player.OwnerClientId} (현재 생존: {alivePlayers.Count}명)");
 
-        if (!isGameActive)
+        if (isGameActive)
+        {
+            // 게임 이미 진행 중에 늦게 등록된 플레이어는 즉시 잠금 해제
+            player.SetMovementLocked(false);
+            player.SetAttackLocked(false);
+        }
+        else
         {
             player.SetMovementLocked(true);
             player.SetAttackLocked(true);
@@ -279,6 +305,12 @@ public class InGameManager : MonoBehaviour
         }
         BroadcastOrShowMessage("START!");
 
+        // isGameActive를 먼저 true로 설정: 이후 RegisterPlayer 호출 시 잠금 해제 분기로 진입
+        isGameActive     = true;
+        gameStartTime    = GetSyncedTime();
+        ElapsedGameTime  = 0f;
+        MatchReviveUsedCount = 0;
+
         // 서버(= listen-server 호스트 포함)의 플레이어 잠금 해제
         foreach (var p in alivePlayers)
         {
@@ -288,11 +320,6 @@ public class InGameManager : MonoBehaviour
                 p.SetAttackLocked(false);
             }
         }
-
-        isGameActive     = true;
-        gameStartTime    = GetSyncedTime();
-        ElapsedGameTime  = 0f;
-        MatchReviveUsedCount = 0;
 
         // ── 서버에서 부활권 NetworkVariable 초기화 ──────────────────
         foreach (var player in alivePlayers)
@@ -397,7 +424,7 @@ public class InGameManager : MonoBehaviour
         if (InGameHUD.Instance != null)
         {
             bool hostWins = winner != null && winner.IsLocalPlayer;
-            InGameHUD.Instance.ShowGameEndBanner(hostWins ? "최후의 1인! 승리!" : "탈락");
+            InGameHUD.Instance.ShowGameEndBanner(hostWins ? "최후의 1인! 승리!" : "탈락", playResultBGM: true);
         }
 
         yield return new WaitForSeconds(3f);
@@ -469,6 +496,9 @@ public class InGameManager : MonoBehaviour
     private void RefreshHUD()
     {
         if (InGameHUD.Instance != null)
-            InGameHUD.Instance.UpdateSurvivorCount(alivePlayers.Count, maxPlayers);
+        {
+            int total = GameStartPlayerCount > 0 ? GameStartPlayerCount : maxPlayers;
+            InGameHUD.Instance.UpdateSurvivorCount(alivePlayers.Count, total);
+        }
     }
 }

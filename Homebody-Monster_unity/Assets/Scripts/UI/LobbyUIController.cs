@@ -171,8 +171,9 @@ public class LobbyUIController : MonoBehaviour
             // GameManager 캐시 업데이트
             if (GameManager.Instance != null)
             {
-                GameManager.Instance.currentPlayerNickname = profile.Nickname; // 채팅용 닉네임 저장
-                GameManager.Instance.reviveTicketCount = profile.ReviveTicketCount;
+                GameManager.Instance.currentPlayerNickname = profile.Nickname;
+                GameManager.Instance.reviveTicketCount     = profile.ReviveTicketCount;
+                GameManager.Instance.pizzaCount            = profile.PizzaCount;
             }
 
             // Supabase Presence 등록 — 닉네임 확보 후 호출해야 올바른 식별자로 등록됨

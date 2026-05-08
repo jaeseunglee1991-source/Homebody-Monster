@@ -189,6 +189,46 @@ public partial class SupabaseManager
     //  ban_logs (서버 전용 — Service Role Key 환경에서만 동작)
     // ════════════════════════════════════════════════════════════
 
+    // ════════════════════════════════════════════════════════════
+    //  캐릭터 리롤 — 피자 차감
+    // ════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// 캐릭터 리롤 비용(피자 20개)을 DB에서 차감합니다.
+    /// spend_pizza_for_reroll() SECURITY DEFINER RPC 사용.
+    /// true = 차감 성공, false = 피자 부족 또는 오류.
+    /// </summary>
+    public async Task<bool> SpendPizzaForReroll()
+    {
+        if (!IsInitialized || Client?.Auth?.CurrentUser == null)
+        {
+            Debug.LogWarning("[SupabaseManager] SpendPizzaForReroll: 초기화되지 않음.");
+            return false;
+        }
+
+        try
+        {
+            var result = await Client.Rpc("spend_pizza_for_reroll", null);
+
+            if (result?.Content != null &&
+                bool.TryParse(result.Content.Trim('"'), out bool ok))
+            {
+                if (ok)
+                    Debug.Log($"[Supabase] 리롤 피자 차감 성공 (🍕{CharacterRerollSystem.RerollCostPizza} 차감)");
+                else
+                    Debug.LogWarning("[Supabase] 리롤 실패 — 피자 부족");
+
+                return ok;
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[SupabaseManager] SpendPizzaForReroll 실패: {e.Message}");
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// 치트 감지 시 ban_logs 테이블에 기록합니다.
     /// 데디케이티드 서버에서 SUPABASE_SERVICE_ROLE_KEY로 초기화된 경우에만 INSERT됩니다.
