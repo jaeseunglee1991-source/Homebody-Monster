@@ -20,6 +20,8 @@ public class ReconnectManager : MonoBehaviour
     public int   maxRetries     = 5;
     public float retryInterval  = 4f;   // 초
 
+    private const string IN_GAME_SCENE = "InGameScene";
+
     [Header("UI (선택)")]
     public GameObject reconnectPanel;
     public UnityEngine.UI.Slider  progressSlider;
@@ -89,7 +91,7 @@ public class ReconnectManager : MonoBehaviour
     private void OnClientDisconnected(string reason)
     {
         // 인게임 씬에서만 재접속 시도
-        if (SceneManager.GetActiveScene().name != "InGameScene") return;
+        if (SceneManager.GetActiveScene().name != IN_GAME_SCENE) return;
         if (_isReconnecting) return;
         if (string.IsNullOrEmpty(_lastIp)) return;
 

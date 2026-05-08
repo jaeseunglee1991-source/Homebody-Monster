@@ -157,6 +157,10 @@ public class PushNotificationManager : MonoBehaviour
             notification, ChannelIdReward, NotifIdDailyReward);
 
         Debug.Log($"[Push] 일일 보상 알림 예약 완료: {nextMidnight:MM/dd HH:mm}");
+#elif UNITY_MOBILE_NOTIFICATIONS && UNITY_IOS
+        // iOS: Unity.Notifications.iOS.iOSNotificationCenter 사용. (별도 채널 개념 없음)
+        // TODO: 프로젝트에 iOS 알림 SDK가 추가되면 여기에 일일 보상 알림 예약 코드를 작성한다.
+        Debug.Log("[Push] iOS 일일 보상 알림 예약 분기 (구현 보류)");
 #endif
     }
 
@@ -180,6 +184,9 @@ public class PushNotificationManager : MonoBehaviour
 
         Unity.Notifications.Android.AndroidNotificationCenter.SendNotificationWithExplicitID(
             notification, ChannelIdGeneral, NotifIdBackgroundReturn);
+#elif UNITY_MOBILE_NOTIFICATIONS && UNITY_IOS
+        // TODO: iOS 백그라운드 복귀 알림 예약 (UnityEngine.iOS / Unity.Notifications.iOS).
+        Debug.Log("[Push] iOS 백그라운드 복귀 알림 예약 분기 (구현 보류)");
 #endif
     }
 
@@ -194,6 +201,10 @@ public class PushNotificationManager : MonoBehaviour
     //  알림에서 앱 진입 처리
     // ════════════════════════════════════════════════════════════
 
+    /// <remarks>
+    /// 메인 스레드에서 호출되어야 합니다. PlayerPrefs / Android JNI 호출이 포함되므로
+    /// FCM 콜백 등 백그라운드 스레드에서 직접 호출하지 말고 MainThreadDispatcher를 거치세요.
+    /// </remarks>
     public void CheckLaunchFromNotification()
     {
 #if UNITY_MOBILE_NOTIFICATIONS && UNITY_ANDROID

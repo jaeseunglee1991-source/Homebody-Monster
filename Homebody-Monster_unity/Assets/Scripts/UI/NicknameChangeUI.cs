@@ -33,21 +33,6 @@ public class NicknameChangeUI : MonoBehaviour
         RegexOptions.Compiled
     );
 
-    private static readonly string[] ForbiddenWords =
-    {
-        "씨발","시발","씨팔","시팔","씨빨","시빨","쓰벌","ㅅㅂ",
-        "개새끼","개새","개년","개놈","개쓰레기",
-        "병신","벙신","ㅂㅅ",
-        "보지","자지",
-        "애미","애비","니애미","니애비",
-        "창녀","창놈","걸레년",
-        "미친놈","미친년","미친새끼",
-        "꺼져","죽어","뒤져",
-        "운영자","관리자","운영진","admin","gm","master","system",
-        "fuck","fuk","fck","shit","bitch","asshole","bastard","cunt",
-        "nigger","nigga"
-    };
-
     private bool   _isAvailable = false;
     private string _checkedName = null;
     private bool   _isBusy      = false;
@@ -235,7 +220,7 @@ public class NicknameChangeUI : MonoBehaviour
                 GameManager.Instance.currentPlayerNickname = _checkedName;
 
             AppNetworkManager.Instance?.TrackLobbyPresence(_checkedName);
-            FindFirstObjectByType<LobbyUIController>()?.RefreshUserProfileUI();
+            FindFirstObjectByType<LobbyUIController>(FindObjectsInactive.Include)?.RefreshUserProfileUI();
 
             SetStatus("✅ 닉네임이 변경되었습니다!", colorOk);
             AudioManager.Instance?.PlayButtonClick();
@@ -273,7 +258,7 @@ public class NicknameChangeUI : MonoBehaviour
             return "한글/영문으로 시작하고, 한글·영문·숫자·_만 사용 가능합니다.";
 
         string lower = name.ToLower();
-        foreach (string bad in ForbiddenWords)
+        foreach (string bad in ForbiddenWords.List)
             if (lower.Contains(bad.ToLower()))
                 return "사용할 수 없는 단어가 포함되어 있습니다.";
 

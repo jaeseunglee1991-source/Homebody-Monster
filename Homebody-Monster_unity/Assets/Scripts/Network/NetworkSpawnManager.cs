@@ -84,6 +84,10 @@ public class NetworkSpawnManager : NetworkBehaviour
                              "Inspector에서 PingMonitor_Host 프리팹을 연결하세요.");
         }
 
+        // H-11: MatchmakingManager가 살아있다면 매치 maxPlayers로 동기화
+        if (MatchmakingManager.Instance != null && MatchmakingManager.Instance.maxPlayers > 0)
+            expectedPlayerCount = MatchmakingManager.Instance.maxPlayers;
+
         Debug.Log($"[NetworkSpawnManager] ☁️ 서버 준비. {expectedPlayerCount}명 대기 시작.");
         StartCoroutine(WaitForPlayersRoutine());
     }
@@ -150,7 +154,7 @@ public class NetworkSpawnManager : NetworkBehaviour
             return;
         }
 
-        Vector3    spawnPos = GetNextSpawnPoint();
+        Vector2    spawnPos = GetNextSpawnPoint();
         Quaternion spawnRot = Quaternion.identity;
 
         var obj    = Instantiate(playerPrefab, spawnPos, spawnRot);
@@ -181,9 +185,9 @@ public class NetworkSpawnManager : NetworkBehaviour
         Debug.Log($"[NetworkSpawnManager] 🎮 플레이어 스폰: clientId={clientId}, pos={spawnPos}");
     }
 
-    public Vector3 GetNextSpawnPoint()
+    public Vector2 GetNextSpawnPoint()
     {
-        if (spawnPoints == null || spawnPoints.Length == 0) return Vector3.zero;
+        if (spawnPoints == null || spawnPoints.Length == 0) return Vector2.zero;
 
         // 셔플된 인덱스가 소진되면 다시 채워서 셔플 (Fisher-Yates)
         if (_shuffledSpawnIndices.Count == 0)
@@ -201,7 +205,7 @@ public class NetworkSpawnManager : NetworkBehaviour
 
         int idx = _shuffledSpawnIndices[0];
         _shuffledSpawnIndices.RemoveAt(0);
-        return spawnPoints[idx] != null ? spawnPoints[idx].position : Vector3.zero;
+        return spawnPoints[idx] != null ? (Vector2)spawnPoints[idx].position : Vector2.zero;
     }
 
     // ════════════════════════════════════════════════════════════

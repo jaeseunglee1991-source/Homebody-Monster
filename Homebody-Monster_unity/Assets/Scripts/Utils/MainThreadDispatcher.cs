@@ -26,6 +26,17 @@ public class MainThreadDispatcher : MonoBehaviour
         }
     }
 
+    private void Awake()
+    {
+        // M-15: Inspector에 수동 배치된 인스턴스가 있을 경우 중복을 방지한다.
+        if (_instance != null && _instance != this)
+        {
+            Destroy(this);
+            return;
+        }
+        _instance = this;
+    }
+
     /// <summary>메인 스레드에서 실행할 액션을 큐에 추가합니다.</summary>
     public static void Enqueue(Action action)
     {

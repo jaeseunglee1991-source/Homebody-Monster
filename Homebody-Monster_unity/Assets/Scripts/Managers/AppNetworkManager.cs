@@ -145,27 +145,41 @@ public class AppNetworkManager : MonoBehaviour
 
     public async void ConnectToLobby()
     {
-        if (SupabaseManager.Instance != null && SupabaseManager.Instance.IsInitialized)
+        // H-22: try-finally로 예외 발생 시에도 OnLobbyChatReady가 반드시 호출되도록 보장
+        bool readyInvoked = false;
+        try
         {
-            SupabaseManager.Instance.OnLobbyChatReceived         -= HandleLobbyChatReceived;      // 중복 방지
-            SupabaseManager.Instance.OnLobbyChatReceived         += HandleLobbyChatReceived;
-            SupabaseManager.Instance.OnLobbyPresenceUpdated      -= HandlePresenceUpdated;   // 중복 방지
-            SupabaseManager.Instance.OnLobbyPresenceUpdated      += HandlePresenceUpdated;
-            await SupabaseManager.Instance.SubscribeLobbyChat();
+            if (SupabaseManager.Instance != null && SupabaseManager.Instance.IsInitialized)
+            {
+                SupabaseManager.Instance.OnLobbyChatReceived         -= HandleLobbyChatReceived;      // 중복 방지
+                SupabaseManager.Instance.OnLobbyChatReceived         += HandleLobbyChatReceived;
+                SupabaseManager.Instance.OnLobbyPresenceUpdated      -= HandlePresenceUpdated;   // 중복 방지
+                SupabaseManager.Instance.OnLobbyPresenceUpdated      += HandlePresenceUpdated;
+                await SupabaseManager.Instance.SubscribeLobbyChat();
 
-            // 채팅 채널 구독 완료 → LobbyUIController에 전송 버튼 활성화 신호
-            OnLobbyChatReady?.Invoke();
+                // 채팅 채널 구독 완료 → LobbyUIController에 전송 버튼 활성화 신호
+                OnLobbyChatReady?.Invoke();
+                readyInvoked = true;
 
-            // 채널 구독 완료 후 닉네임이 이미 로드된 경우 즉시 Track
-            // (RefreshUserProfileUI가 먼저 끝난 경쟁 조건 방어)
-            string nickname = GameManager.Instance?.currentPlayerNickname;
-            if (!string.IsNullOrEmpty(nickname))
-                SupabaseManager.Instance.TrackLobbyPresence(nickname);
+                // 채널 구독 완료 후 닉네임이 이미 로드된 경우 즉시 Track
+                // (RefreshUserProfileUI가 먼저 끝난 경쟁 조건 방어)
+                string nickname = GameManager.Instance?.currentPlayerNickname;
+                if (!string.IsNullOrEmpty(nickname))
+                    SupabaseManager.Instance.TrackLobbyPresence(nickname);
+            }
+            else
+            {
+                Debug.LogWarning("[AppNetworkManager] Supabase 미초기화 — 로비 오프라인 모드");
+                OnPlayerPresenceUpdated?.Invoke(new List<string>()); // 오프라인 폴백: 빈 리스트
+            }
         }
-        else
+        catch (System.Exception e)
         {
-            Debug.LogWarning("[AppNetworkManager] Supabase 미초기화 — 로비 오프라인 모드");
-            OnPlayerPresenceUpdated?.Invoke(new List<string>()); // 오프라인 폴백: 빈 리스트
+            Debug.LogError($"[AppNetworkManager] ConnectToLobby 예외: {e.Message}");
+        }
+        finally
+        {
+            if (!readyInvoked) OnLobbyChatReady?.Invoke();
         }
     }
 
@@ -184,11 +198,19 @@ public class AppNetworkManager : MonoBehaviour
     }
 
     /// <summary>Supabase Realtime에서 수신한 채팅 메시지를 LobbyUIController로 전달합니다.</summary>
-    private void HandleLobbyChatReceived(string nickname, string message)
+    private void HandleLobbyChatReceived(string nickname, string message, string senderUuid)
     {
-        // 내가 보낸 메시지는 이미 SendChatMessage에서 즉시 그렸으므로 무시 (중복 방지)
-        string myNickname = GameManager.Instance?.currentPlayerNickname;
-        if (!string.IsNullOrEmpty(myNickname) && nickname == myNickname) return;
+        // H-8: 내가 보낸 메시지는 UUID로 정확히 식별 (동명이인 충돌 방지)
+        string myUuid = GameManager.Instance?.currentPlayerId;
+        if (!string.IsNullOrEmpty(senderUuid) && !string.IsNullOrEmpty(myUuid) && senderUuid == myUuid)
+            return;
+
+        // UUID 누락(레거시 클라이언트) 시 닉네임 폴백
+        if (string.IsNullOrEmpty(senderUuid))
+        {
+            string myNickname = GameManager.Instance?.currentPlayerNickname;
+            if (!string.IsNullOrEmpty(myNickname) && nickname == myNickname) return;
+        }
 
         string formatted = $"[{nickname}]: {message}";
         OnChatReceived?.Invoke(formatted);
@@ -203,7 +225,7 @@ public class AppNetworkManager : MonoBehaviour
         // UID 대신 실제 닉네임 사용
         string nickname = GameManager.Instance?.currentPlayerNickname;
         if (string.IsNullOrEmpty(nickname))
-            nickname = GameManager.Instance?.currentPlayerId ?? "???"; // 닉네임 없으면 UID로 폴백
+            nickname = "알 수 없음"; // H-7: UUID 노출 방지
 
         string formatted = $"[{nickname}]: {message}";
 

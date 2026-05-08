@@ -81,6 +81,9 @@ public class InGameHUD : MonoBehaviour
     private PlayerNetworkSync   pendingReviveSync;
     private Coroutine           reviveCountdownRoutine;
 
+    // H-14: PlayerController.Start와 HandleHpChanged 두 경로에서 InitPlayerUI가 두 번 호출되는 문제 방지
+    private bool _hudInitialized;
+
     private void Awake()
     {
         if (Instance == null) Instance = this;
@@ -117,6 +120,11 @@ public class InGameHUD : MonoBehaviour
 
     public void InitPlayerUI(PlayerController player)
     {
+        // H-14: 중복 호출 가드 — 첫 호출에서 즉시 플래그를 세워서 PlayerController.Start와
+        // HandleHpChanged가 동시 진입할 때 SetupSkillButtons가 두 번 실행되는 것을 방지.
+        if (_hudInitialized && localPlayer == player) return;
+        _hudInitialized = true;
+
         localPlayer = player;
         SetupSkillButtons(player);
     }
@@ -193,6 +201,11 @@ public class InGameHUD : MonoBehaviour
         if (cooldownTimers == null) return;
         for (int i = 0; i < cooldownTimers.Length; i++)
         {
+            // [버그 수정] 비활성 스킬 버튼은 순회 스킵 — 슬롯에 스킬이 없는 버튼의 쿨다운/UI 갱신 방지.
+            if (skillButtons != null && i < skillButtons.Length && skillButtons[i] != null
+                && !skillButtons[i].gameObject.activeSelf)
+                continue;
+
             if (cooldownTimers[i] > 0f)
                 cooldownTimers[i] = Mathf.Max(0f, cooldownTimers[i] - Time.deltaTime);
             if (skillCooldownFills != null && i < skillCooldownFills.Length && skillCooldownFills[i] != null)
@@ -410,21 +423,26 @@ public class InGameHUD : MonoBehaviour
 
     private IEnumerator ReviveCountdown(float duration)
     {
-        // [Fix #8] 매 프레임(yield return null)에서 0.5초 간격으로 변경.
-        // UpdateReviveInfoText()의 불필요한 매 프레임 연산을 줄이고,
-        // 카운트다운 숫자는 0.5초 단위로 갱신해도 사용자가 체감하지 못합니다.
-        var halfSecWait = new WaitForSeconds(0.5f);
+        // H-21: WaitForSeconds(0.5f) 누적은 프레임 변동성·일시정지에서 부정확.
+        // Time.deltaTime 기반으로 변경 — 실시간과 정확히 일치, 0.5초 주기 UI 갱신은 별도 누적값으로 제어.
         float timer = duration;
+        float refreshAccum = 0f;
+        const float refreshInterval = 0.5f;
+
         while (timer > 0f)
         {
             if (reviveTimerText != null)
                 reviveTimerText.text = Mathf.CeilToInt(timer).ToString();
 
-            // 카운트다운 중에도 정보 텍스트 갱신
-            UpdateReviveInfoText();
+            refreshAccum += Time.deltaTime;
+            if (refreshAccum >= refreshInterval)
+            {
+                refreshAccum = 0f;
+                UpdateReviveInfoText();
+            }
 
-            yield return halfSecWait;
-            timer -= 0.5f;
+            yield return null;
+            timer -= Time.deltaTime;
         }
         // 5초 만료 → 서버 타임아웃 코루틴이 킬 처리, UI만 닫음
         HideReviveUI();

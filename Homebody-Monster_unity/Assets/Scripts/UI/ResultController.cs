@@ -202,7 +202,7 @@ public class ResultController : MonoBehaviour
     /// Supabase 프로필에서 승/패 전적을 로드하여 UI에 표시합니다.
     ///
     /// [Fix] GameManager.MatchResultSaveTask 완료 대기 추가.
-    /// save_match_result RPC가 완료되기 전에 GetOrCreateProfile을 호출하면
+    /// save_match_result RPC가 완료되기 전에 GetProfile을 호출하면
     /// 이번 매치 결과가 반영되지 않은 이전 전적이 표시되는 버그 수정.
     /// 최대 5초 대기 후 타임아웃 시 그 시점의 프로필로 표시.
     /// </summary>
@@ -230,7 +230,7 @@ public class ResultController : MonoBehaviour
                 Debug.LogWarning("[ResultController] 결과 저장 대기 타임아웃 — 이전 전적이 표시될 수 있습니다.");
         }
 
-        var task = SupabaseManager.Instance.GetOrCreateProfile(GameManager.Instance.currentPlayerId);
+        var task = SupabaseManager.Instance.GetProfile(GameManager.Instance.currentPlayerId);
         while (!task.IsCompleted) yield return null;
 
         if (task.Result != null)
@@ -257,7 +257,9 @@ public class ResultController : MonoBehaviour
 
         MatchResult result = GameManager.Instance.lastMatchResult;
 
-        var task = SupabaseManager.Instance.GrantMatchRewards(result.rank, result.killCount, false);
+        // [멱등성] roomId 전달 시 DB PK(player_id, room_id, ad_doubled=false) 충돌로 중복 지급 자동 차단
+        var task = SupabaseManager.Instance.GrantMatchRewards(
+            result.rank, result.killCount, false, GameManager.Instance.currentRoomId);
         while (!task.IsCompleted) yield return null;
 
         _earnedPizza = task.Result;
@@ -411,11 +413,20 @@ public class ResultController : MonoBehaviour
 
         MatchResult result = GameManager.Instance.lastMatchResult;
 
-        // DB에 광고 2배 보상 요청
-        var task = SupabaseManager.Instance.GrantMatchRewards(result.rank, result.killCount, true);
+        // DB에 광고 2배 보상 요청 — roomId 전달로 (player_id, room_id, ad_doubled=true) PK 멱등성
+        var task = SupabaseManager.Instance.GrantMatchRewards(
+            result.rank, result.killCount, true, GameManager.Instance.currentRoomId);
         while (!task.IsCompleted) yield return null;
 
         int bonusPizza = task.Result;
+
+        // H-3: GrantMatchRewards가 0(실패)을 반환하면 재시도 가능하도록 플래그 복원
+        if (bonusPizza == 0)
+        {
+            _adBonusClaimed = false;
+            if (adBonusButton != null) adBonusButton.interactable = true;
+            yield break;
+        }
 
         if (rewardText != null)
             rewardText.text = $"<color=#f39c12>🍕 {_earnedPizza} + {bonusPizza} 피자 획득! (광고 보너스)</color>";

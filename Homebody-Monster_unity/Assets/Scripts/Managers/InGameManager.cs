@@ -44,6 +44,7 @@ public class InGameManager : MonoBehaviour
 
     /// <summary>현재 생존 중인 플레이어 수. 2명 이하이면 부활권 사용 불가.</summary>
     public int AliveCount => alivePlayers.Count;
+    public IReadOnlyList<PlayerController> AlivePlayers => alivePlayers;
 
     private readonly List<PlayerController> alivePlayers = new List<PlayerController>();
     // 클라이언트ID별 최종 순위 — OnPlayerDied 시점에 기록 (FinishGame 호출 시 alivePlayers.Count=1로 역산 불가)
@@ -95,6 +96,7 @@ public class InGameManager : MonoBehaviour
         float elapsed = 0f;
         while (elapsed < 2f)
         {
+            if (isGameActive) yield break;
             foreach (var player in FindObjectsByType<PlayerController>(FindObjectsSortMode.None))
             {
                 RegisterPlayer(player);
@@ -121,7 +123,7 @@ public class InGameManager : MonoBehaviour
                 ? GetSyncedTime() - gameStartTime
                 : 0f;
 
-            if (InGameHUD.Instance != null)
+            if (timeLimitSeconds > 0f && InGameHUD.Instance != null)
             {
                 // [수정] 5분(300초) 카운트다운 방식으로 표시
                 float remaining = Mathf.Max(0f, timeLimitSeconds - ElapsedGameTime);
@@ -240,7 +242,9 @@ public class InGameManager : MonoBehaviour
 
     private void CleanUpDisconnectedPlayers()
     {
-        int removed = alivePlayers.RemoveAll(p => p == null || !p.gameObject.activeInHierarchy);
+        // M-20: activeInHierarchy 대신 IsDead로 판정 — 사망 연출 중 일시적으로
+        // 비활성화된 플레이어를 "끊김"으로 오인하지 않는다.
+        int removed = alivePlayers.RemoveAll(p => p == null || p.IsDead);
         if (removed > 0)
         {
             Debug.Log($"[InGameManager] 비정상 이탈 {removed}명 정리.");
@@ -284,6 +288,13 @@ public class InGameManager : MonoBehaviour
         float extraWait = 0f;
         while (alivePlayers.Count < maxPlayers && extraWait < 3f)
         {
+            // [버그 수정 X-I] alivePlayers 외에 NetworkSpawnManager의 spawned/alive 수도 확인하여
+            // 더 빠르게 시작 판정 — alivePlayers 등록이 늦은 경우의 불필요한 대기 단축.
+            int spawnedCount = NetworkSpawnManager.Instance != null
+                ? NetworkSpawnManager.Instance.GetAliveCount()
+                : 0;
+            if (spawnedCount >= maxPlayers) break;
+
             BroadcastOrShowMessage($"게임 준비 중... ({alivePlayers.Count}/{maxPlayers})");
             yield return new WaitForSeconds(1f);
             extraWait += 1f;
@@ -338,6 +349,8 @@ public class InGameManager : MonoBehaviour
     public void ClientReceiveGameStart(float serverStartTime)
     {
         Debug.Log($"[InGameManager] 클라이언트 게임 시작 신호 수신 (서버 시간: {serverStartTime})");
+        // H-12: 이미 게임 시작된 상태에서 중복 호출 방지 (재진입 시 상태 리셋 방지)
+        if (isGameActive) return;
         // listen-server 호스트는 GameStartSequence에서 이미 처리했으므로 건너뜀
         var netMgr = Unity.Netcode.NetworkManager.Singleton;
         if (netMgr != null && netMgr.IsServer) return;
@@ -459,12 +472,18 @@ public class InGameManager : MonoBehaviour
         // • 데디케이티드 서버: IsOwner 플레이어 없음 → 서버에서 계산 불가
         //   → ClientRpc로 각 Owner 클라이언트에게 전달, 수신 측에서 GameManager 저장 + Supabase 저장
         // • listen-server: 호스트도 ClientRpc 수신 → 동일 경로로 처리
-        foreach (var p in FindObjectsByType<PlayerController>(FindObjectsSortMode.None))
+        var allSyncs = NetworkSpawnManager.Instance != null
+            ? NetworkSpawnManager.Instance.GetAllPlayers()
+            : (System.Collections.Generic.IReadOnlyCollection<PlayerNetworkSync>)
+              System.Array.Empty<PlayerNetworkSync>();
+        foreach (var sync in allSyncs)
         {
-            if (p == null || p.networkSync == null) continue;
+            if (sync == null) continue;
+            var p = sync.GetComponent<PlayerController>();
+            if (p == null) continue;
 
             bool  pIsWinner = winner != null && p == winner;
-            ulong clientId  = p.networkSync.OwnerClientId;
+            ulong clientId  = sync.OwnerClientId;
 
             int pRank = pIsWinner ? 1
                 : _playerFinalRanks.TryGetValue(clientId, out int r) ? r
@@ -499,9 +518,25 @@ public class InGameManager : MonoBehaviour
         yield return new WaitForSeconds(2f);
 
         // ── NGO SceneManager로 전체 씬 전환 ────────────────────────
+        // [버그 수정 X-A] netMgr이 없거나 SceneManager.LoadScene이 실패하면
+        // GameManager.LoadScene(SceneResult)로 폴백 — 데디케이티드 서버 정상 정리.
         var netMgr = Unity.Netcode.NetworkManager.Singleton;
-        if (netMgr != null && netMgr.IsServer)
-            netMgr.SceneManager.LoadScene(GameManager.SceneResult, LoadSceneMode.Single);
+        bool ngoLoaded = false;
+        try
+        {
+            if (netMgr != null && netMgr.IsServer)
+            {
+                netMgr.SceneManager.LoadScene(GameManager.SceneResult, LoadSceneMode.Single);
+                ngoLoaded = true;
+            }
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogWarning($"[InGameManager] NGO SceneManager.LoadScene 실패: {e.Message}");
+        }
+
+        if (!ngoLoaded)
+            GameManager.Instance?.LoadScene(GameManager.SceneResult);
     }
 
     private PlayerController GetHighestHpPlayer()

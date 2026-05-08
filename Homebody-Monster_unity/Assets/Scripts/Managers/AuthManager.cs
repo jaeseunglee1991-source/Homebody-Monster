@@ -40,21 +40,6 @@ public class AuthManager : MonoBehaviour
         RegexOptions.Compiled
     );
 
-    private static readonly string[] ForbiddenWords =
-    {
-        "씨발","시발","씨팔","시팔","씨빨","시빨","쓰벌","ㅅㅂ",
-        "개새끼","개새","개년","개놈","개쓰레기",
-        "병신","벙신","ㅂㅅ",
-        "보지","자지",
-        "애미","애비","니애미","니애비",
-        "창녀","창놈","걸레년",
-        "미친놈","미친년","미친새끼",
-        "꺼져","죽어","뒤져",
-        "운영자","관리자","운영진","admin","gm","master","system",
-        "fuck","fuk","fck","shit","bitch","asshole","bastard","cunt",
-        "nigger","nigga"
-    };
-
     private bool _isBusy = false;
 
     // ════════════════════════════════════════════════════════════
@@ -63,7 +48,8 @@ public class AuthManager : MonoBehaviour
 
     private void Awake()
     {
-        if (Instance == null) { Instance = this; DontDestroyOnLoad(gameObject); }
+        // AuthManager는 LoginScene 전용. 씬 전환 시 함께 파괴되도록 DontDestroyOnLoad 사용 안 함.
+        if (Instance == null) { Instance = this; }
         else { Destroy(gameObject); return; }
     }
 
@@ -212,18 +198,19 @@ public class AuthManager : MonoBehaviour
     private async Task CheckUserFlow(string uid)
     {
         Debug.Log($"[Auth] Checking flow for UID: {uid}");
-        if (string.IsNullOrEmpty(uid)) { ShowError("사용자 정보를 불러오지 못했습니다."); return; }
+        if (string.IsNullOrEmpty(uid)) { ShowError("사용자 정보를 불러오지 못했습니다."); SetBusy(false, preserveError: true); return; }
 
         try
         {
             Debug.Log("[Auth] Fetching profile...");
-            var profile = await SupabaseManager.Instance.GetOrCreateProfile(uid);
+            var profile = await SupabaseManager.Instance.GetProfile(uid);
 
             if (profile == null)
             {
-                Debug.LogError("[Auth] Profile is null after GetOrCreateProfile");
+                Debug.LogError("[Auth] Profile is null after GetProfile");
                 ShowError("프로필을 불러오지 못했습니다. 다시 시도해주세요.");
                 SetPanelState(loading: false);
+                SetBusy(false, preserveError: true); // H-17
                 return;
             }
 
@@ -250,6 +237,7 @@ public class AuthManager : MonoBehaviour
             Debug.LogError($"[Auth] CheckUserFlow error: {e.Message}");
             ShowError("데이터 확인 중 오류가 발생했습니다.");
             SetPanelState(loading: false);
+            SetBusy(false, preserveError: true); // H-17
         }
     }
 
@@ -282,9 +270,9 @@ public class AuthManager : MonoBehaviour
             return;
         }
 
-        // 금칙어 체크
+        // 금칙어 체크 (공통 ForbiddenWords.List 사용)
         string lowerName = newName.ToLower();
-        foreach (string word in ForbiddenWords)
+        foreach (string word in ForbiddenWords.List)
         {
             if (lowerName.Contains(word.ToLower()))
             {

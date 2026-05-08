@@ -77,6 +77,14 @@ public class PlayerNetworkSync : NetworkBehaviour
     // [FIX] 이동 방향 동기화 — 다른 클라이언트 캐릭터 flipX 갱신용.
     // ClientNetworkTransform이 위치를 동기화하지만 moveDir은 동기화하지 않아
     // 다른 플레이어가 왼쪽으로 이동해도 스프라이트가 뒤집히지 않는 버그 수정.
+    // [외형 동기화] 직업 인덱스 — JobVisualRegistry 룩업용.
+    // -1 = 미설정 (SubmitCharacterDataServerRpc 도달 전).
+    // 서버 권한 — 클라이언트 위변조 차단 + 서버 검증 통과한 직업만 브로드캐스트.
+    // OnValueChanged 는 Despawn 후엔 발동 안 되므로 PlayerController 가 OnNetworkSpawn 에서
+    // 현재 값을 즉시 한번 읽고 + 구독한다 (late join / 재접속 대응).
+    public readonly NetworkVariable<int> NetworkJob = new(
+        -1, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
     public readonly NetworkVariable<Vector2> NetworkMoveDir = new(
         Vector2.zero,
         NetworkVariableReadPermission.Everyone,
@@ -89,6 +97,8 @@ public class PlayerNetworkSync : NetworkBehaviour
     private string             _serverUserId;
     private float              _lastAttackTime = -999f;
     private PlayerNetworkSync  _pendingKiller  = null;
+    // [X-F] Thorns 반사 재진입 차단 플래그 (반사 데미지가 또 반사되는 것 방지)
+    private bool _thornsReflecting = false;
     // 스킬별 마지막 사용 시각 — 악의적 클라이언트의 쿨다운 무시 RPC 반복 전송 방지
     private readonly Dictionary<ActiveSkillType, float> _skillLastUsed =
         new Dictionary<ActiveSkillType, float>();
@@ -103,6 +113,7 @@ public class PlayerNetworkSync : NetworkBehaviour
     private bool _hasUsedRevive      = false;
     private bool _isProcessingRevive = false;
     private CancellationTokenSource _reviveCts = null;
+    private Coroutine _regenCoroutine = null;
 
     public CharacterData ServerData  => _serverData;
     // [버그 수정] ServerValidator.BanAndKickAsync가 정확한 userId를 참조할 수 있도록 공개
@@ -193,8 +204,11 @@ public class PlayerNetworkSync : NetworkBehaviour
     {
         if (_controller.myData != null) _controller.myData.currentHp = curr;
         if (!IsOwner) return;
-        if (!_hudInitialized && InGameHUD.Instance != null && _controller.myData != null)
+        if (!_hudInitialized && InGameHUD.Instance != null && _controller.myData != null
+            && _controller.myData.activeSkills != null && _controller.myData.activeSkills.Count > 0)
         {
+            // [버그 수정] activeSkills가 비어있는 시점에 InitPlayerUI 호출 시 스킬 버튼 미초기화.
+            // myData가 채워졌더라도 activeSkills.Count > 0 검증 후 호출.
             InGameHUD.Instance.InitPlayerUI(_controller);
             _hudInitialized = true;
         }
@@ -257,12 +271,16 @@ public class PlayerNetworkSync : NetworkBehaviour
         NetworkNickname.Value  = nickname;
         NetworkHp.Value        = _serverData.maxHp;
         NetworkMaxHp.Value     = _serverData.maxHp;
+        // [외형 동기화] 검증된 직업을 모든 클라이언트에 브로드캐스트.
+        // PlayerController.OnJobValueChanged 가 수신하여 UpdateVisualByJob 호출.
+        NetworkJob.Value       = (int)_serverData.job;
 
         // [FIX] Regeneration 패시브 NetworkHp 미갱신 버그 수정.
         // CombatSystem.RegenerationRoutine은 data.currentHp만 수정하고 NetworkHp.Value를 갱신하지 않아
         // 다른 클라이언트에 HP 회복이 전파되지 않고 서버 전투 판정과도 불일치 발생.
         // HealServer()를 사용하는 전용 코루틴으로 대체하여 NetworkHp.Value 동기화 보장.
-        StartCoroutine(RegenerationNetworkRoutine());
+        if (_regenCoroutine != null) StopCoroutine(_regenCoroutine);
+        _regenCoroutine = StartCoroutine(RegenerationNetworkRoutine());
     }
 
     private System.Collections.IEnumerator RegenerationNetworkRoutine()
@@ -344,17 +362,17 @@ public class PlayerNetworkSync : NetworkBehaviour
 
         DamageResult result = CombatSystem.CalculateDamage(_serverData, targetSync._serverData, attackerFx, targetFx);
 
-        if (!result.isEvaded && !result.isDivineGraceBlocked && result.finalDamage > 0f)
-        {
-            // PostDamageEffects: 흡혈(공격자 HP 회복), 가시갑옥(공격자 HP 감소), lastCombatTime 등 처리
-            CombatSystem.PostDamageEffects(_serverData, targetSync._serverData, attackerFx, targetFx, result.finalDamage);
-            NetworkHp.Value = Mathf.Clamp(_serverData.currentHp, 0f, NetworkMaxHp.Value);
-        }
-
-        // 원래 공격 데미지는 Thorns 반사와 무관하게 타겟에게 항상 적용
+        // 원래 공격 데미지는 Thorns 반사와 무관하게 타겟에게 항상 적용 (먼저 처리하여 Thorns 사망 판정이 올바른 HP 순서를 보도록)
         float newHp = Mathf.Max(0f, targetSync.NetworkHp.Value - result.finalDamage);
         targetSync.NetworkHp.Value       = newHp;
         targetSync._serverData.currentHp = newHp;
+
+        if (!result.isEvaded && !result.isDivineGraceBlocked && result.finalDamage > 0f)
+        {
+            // PostDamageEffects: 흡혈(공격자 HP 회복), lastCombatTime 등 처리 (Thorns 분리됨)
+            CombatSystem.PostDamageEffects(_serverData, targetSync._serverData, attackerFx, targetFx, result.finalDamage);
+            NetworkHp.Value = Mathf.Clamp(_serverData.currentHp, 0f, NetworkMaxHp.Value);
+        }
 
         targetSync.NotifyHitClientRpc(result);
 
@@ -366,14 +384,18 @@ public class PlayerNetworkSync : NetworkBehaviour
             ProcessDeath(targetSync, attackerFx, targetFx);
         }
 
-        // [버그 수정] 2순위: 가시갑옥(Thorns) 반사로 공격자 HP가 0 이하가 된 경우
-        // PostDamageEffects는 _serverData.currentHp만 수정하므로 ProcessDeath가 호출되지 않았음.
-        // 원래 공격 데미지를 타겟에게 적용한 이후에 순차적으로 처리합니다.
-        // (공격자가 Thorns로 죽어도 원래 타격은 이미 위에서 타겟에 반영됨)
-        if (NetworkHp.Value <= 0f && !NetworkIsDead.Value)
+        // [버그 수정 X-F] Thorns 반사를 정상 데미지 파이프라인(ApplyDamageServer)으로 처리.
+        // 무한 반사 방지를 위해 _thornsReflecting 플래그로 재진입 차단.
+        if (!result.isEvaded && !result.isDivineGraceBlocked && result.finalDamage > 0f
+            && !_thornsReflecting)
         {
-            NetworkIsDead.Value = true;
-            targetSync.ProcessDeath(this, targetFx, attackerFx);
+            float reflect = CombatSystem.CalculateThornsReflect(targetSync._serverData, result.finalDamage);
+            if (reflect > 0f)
+            {
+                _thornsReflecting = true;
+                try { ApplyDamageServer(reflect, targetSync); }
+                finally { _thornsReflecting = false; }
+            }
         }
     }
 
@@ -514,7 +536,7 @@ public class PlayerNetworkSync : NetworkBehaviour
     {
         try
         {
-            await Task.Delay(7000, token); // 7.0초 대기: UI 5초 + RTT 여유 2초 (취소 가능)
+            await Task.Delay(6000, token); // 6.0초 대기: UI 5초 + RTT 여유 1초 (취소 가능)
         }
         catch (TaskCanceledException)
         {
@@ -526,8 +548,9 @@ public class PlayerNetworkSync : NetworkBehaviour
         if (!_hasUsedRevive && !_isProcessingRevive)
         {
             _hasUsedRevive = true;
-            FinalizeDeath(this);
+            // [버그 수정 X-B] 순서 변경 — ReviveDeniedClientRpc 먼저(UI 닫고), 그 후 FinalizeDeath.
             ReviveDeniedClientRpc();
+            FinalizeDeath(this);
         }
     }
 
@@ -627,7 +650,7 @@ public class PlayerNetworkSync : NetworkBehaviour
                     ticketTask,
                     System.Threading.Tasks.Task.Delay(10000, cts.Token));
                 if (completedTask == ticketTask)
-                    success = ticketTask.Result;
+                    success = ticketTask.IsCompletedSuccessfully && ticketTask.Result;
                 else
                     Debug.LogWarning("[PlayerNetworkSync] 티켓 차감 타임아웃 (10초) → 부활 거부");
             }
@@ -680,7 +703,12 @@ public class PlayerNetworkSync : NetworkBehaviour
         InGameManager.Instance?.OnReviveTicketUsed();
         InGameManager.Instance?.OnPlayerRevived(_controller);
 
-        ExecuteReviveClientRpc();
+        // [버그 수정] 부활 위치를 서버에서 결정하여 모든 클라이언트가 동일 위치를 보도록 전달.
+        // 이전에는 클라이언트가 각자 GetNextSpawnPoint()를 호출하여 desync 가능.
+        Vector2 spawnPos = NetworkSpawnManager.Instance != null
+            ? NetworkSpawnManager.Instance.GetNextSpawnPoint()
+            : Vector2.zero;
+        ExecuteReviveClientRpc(spawnPos);
     }
 
     [ServerRpc]
@@ -695,9 +723,9 @@ public class PlayerNetworkSync : NetworkBehaviour
     }
 
     [ClientRpc]
-    private void ExecuteReviveClientRpc()
+    private void ExecuteReviveClientRpc(Vector2 spawnPos)
     {
-        _controller.ReviveNetwork();
+        _controller.ReviveNetwork(spawnPos);
     }
 
     [ClientRpc]
@@ -1151,6 +1179,9 @@ public class PlayerNetworkSync : NetworkBehaviour
 
                 float chainDmg = Mathf.Round(explosionDamage * 0.6f * 10f) / 10f;
                 if (chainDmg <= 0f) continue;
+                // [버그 수정] 체이닝 사망 시 킬 크레딧이 원래 caster에게 귀속되도록
+                // _pendingKiller를 ApplyDamageServer 호출 직전에 설정.
+                pc.networkSync._pendingKiller = casterSync;
                 pc.networkSync.ApplyDamageServer(chainDmg, casterSync);
             }
         }

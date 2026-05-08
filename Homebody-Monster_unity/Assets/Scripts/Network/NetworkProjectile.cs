@@ -60,8 +60,8 @@ public class NetworkProjectile : NetworkBehaviour
     {
         if (!IsServer) return;
 
-        // 투사체가 날아가는 도중 발사자가 나갔을 경우 즉시 소멸 (Null 방지)
-        if (_ownerSync == null)
+        // 투사체가 날아가는 도중 발사자가 나갔을 경우 즉시 소멸 (Null/Despawn 방지)
+        if (_ownerSync == null || !_ownerSync.IsSpawned)
         {
             DespawnProjectile();
             return;

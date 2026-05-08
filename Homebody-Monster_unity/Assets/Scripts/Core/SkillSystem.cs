@@ -87,7 +87,7 @@ public static class SkillSystem
                     OwnerRpcParams(caster.networkSync.OwnerClientId));
                 // 서버에서는 경로 전체를 CircleCast로 충돌 판정 (이동 없이 계산만)
                 yield return new WaitForSeconds(0.15f);
-                if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
+                if (caster == null || caster.networkSync == null || !caster.networkSync.IsSpawned || caster.networkSync.NetworkIsDead.Value) yield break;
                 foreach (var h in Physics2D.CircleCastAll(orig, 0.8f, dir, 2.5f, Physics2D.AllLayers))
                 {
                     var t = h.collider.GetComponent<PlayerController>();
@@ -105,7 +105,7 @@ public static class SkillSystem
 
             case ActiveSkillType.EarthquakeStrike:
                 yield return new WaitForSeconds(0.1f);
-                if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
+                if (caster == null || caster.networkSync == null || !caster.networkSync.IsSpawned || caster.networkSync.NetworkIsDead.Value) yield break;
                 foreach (var t in GetEnemiesInRadius(caster, 3.5f))
                 {
                     if (!DealSkillDamageServer(caster, t, cData.baseAtk * 2.0f))
@@ -184,7 +184,7 @@ public static class SkillSystem
 
             case ActiveSkillType.JudgmentHammer:
                 yield return new WaitForSeconds(0.3f);
-                if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
+                if (caster == null || caster.networkSync == null || !caster.networkSync.IsSpawned || caster.networkSync.NetworkIsDead.Value) yield break;
                 foreach (var t in GetEnemiesInRadius(caster, 1.2f, targetPos))
                 {
                     if (!DealSkillDamageServer(caster, t, cData.baseAtk * 1.0f))
@@ -199,7 +199,7 @@ public static class SkillSystem
 
             case ActiveSkillType.PillarOfJudgment:
                 yield return new WaitForSeconds(0.6f);
-                if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
+                if (caster == null || caster.networkSync == null || !caster.networkSync.IsSpawned || caster.networkSync.NetworkIsDead.Value) yield break;
                 foreach (var t in GetEnemiesInRadius(caster, 1.5f, targetPos))
                     if (!DealSkillDamageServer(caster, t, cData.baseAtk * 3.0f)) break; // [버그 수정] Thorns 반사로 caster 사망 → AoE 루프 중단
                 yield break;
@@ -247,13 +247,17 @@ public static class SkillSystem
                 while (el < 3f)
                 {
                     // 매 프레임 시전자 생존 여부 확인 (Despawn·사망 대응)
-                    if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
+                    if (caster == null || caster.networkSync == null || !caster.networkSync.IsSpawned || caster.networkSync.NetworkIsDead.Value) yield break;
                     el += Time.deltaTime;
                     if (el >= next)
                     {
                         next += 0.5f;
+                        // [버그 수정 R-13] cData 캡처 대신 루프 내 ServerData를 직접 참조.
+                        // 캡처된 cData는 Despawn/재생성 시 stale 가능 — 매 틱 최신값으로 안전 조회.
+                        var liveData = caster.networkSync.ServerData;
+                        if (liveData == null) yield break;
                         foreach (var t in GetEnemiesInRadius(caster, 2.0f))
-                            DealSkillDamageServer(caster, t, cData.baseAtk * 0.5f);
+                            DealSkillDamageServer(caster, t, liveData.baseAtk * 0.5f);
                     }
                     yield return null;
                 }
@@ -290,7 +294,7 @@ public static class SkillSystem
 
             case ActiveSkillType.Meteor:
                 yield return new WaitForSeconds(1f);
-                if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
+                if (caster == null || caster.networkSync == null || !caster.networkSync.IsSpawned || caster.networkSync.NetworkIsDead.Value) yield break;
                 foreach (var t in GetEnemiesInRadius(caster, 3.5f, targetPos))
                 {
                     if (!DealSkillDamageServer(caster, t, cData.baseAtk * 2.5f))
@@ -346,7 +350,7 @@ public static class SkillSystem
                 while (el < 3f)
                 {
                     // 매 프레임 시전자 생존 여부 확인
-                    if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
+                    if (caster == null || caster.networkSync == null || !caster.networkSync.IsSpawned || caster.networkSync.NetworkIsDead.Value) yield break;
                     el += Time.deltaTime;
                     if (el >= next)
                     {
@@ -450,7 +454,7 @@ public static class SkillSystem
                     DealSkillDamageServer(caster, t, cData.baseAtk * 0.8f);
                     yield return new WaitForSeconds(0.15f);
                     // 0.15초 대기 후 시전자·대상 생존 여부 재확인
-                    if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
+                    if (caster == null || caster.networkSync == null || !caster.networkSync.IsSpawned || caster.networkSync.NetworkIsDead.Value) yield break;
                     if (t == null || t.networkSync == null || t.networkSync.NetworkIsDead.Value) yield break;
                     DealSkillDamageServer(caster, t, cData.baseAtk * 0.8f);
                 }
@@ -469,7 +473,7 @@ public static class SkillSystem
                 }
                 yield return new WaitForSeconds(0.4f);
                 // 0.4초 대기 후 시전자 생존 여부 확인 (회부 진행 전 검증)
-                if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
+                if (caster == null || caster.networkSync == null || !caster.networkSync.IsSpawned || caster.networkSync.NetworkIsDead.Value) yield break;
                 foreach (var h in Physics2D.RaycastAll(caster.transform.position, -dir, 7f, Physics2D.AllLayers))
                 {
                     var t = h.collider.GetComponent<PlayerController>();
@@ -534,7 +538,7 @@ public static class SkillSystem
                 while (el < 3f)
                 {
                     // 매 프레임 시전자 생존 여부 확인
-                    if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
+                    if (caster == null || caster.networkSync == null || !caster.networkSync.IsSpawned || caster.networkSync.NetworkIsDead.Value) yield break;
                     el += Time.deltaTime;
                     if (el >= nextTick)
                     {
@@ -557,7 +561,7 @@ public static class SkillSystem
             case ActiveSkillType.FeastTime:
                 yield return new WaitForSeconds(4f);
                 // 4초 대기 후 시전자 생존 여부 확인
-                if (caster == null || caster.networkSync == null || caster.networkSync.NetworkIsDead.Value) yield break;
+                if (caster == null || caster.networkSync == null || !caster.networkSync.IsSpawned || caster.networkSync.NetworkIsDead.Value) yield break;
                 foreach (var t in GetEnemiesInRadius(caster, 3.0f, targetPos))
                     if (!DealSkillDamageServer(caster, t, cData.baseAtk * 2.5f)) break; // [버그 수정] Thorns 반사로 caster 사망 → AoE 루프 중단
                 yield break;
@@ -673,8 +677,12 @@ public static class SkillSystem
             // 피격 쿨다운 중이면 판정 생략
             if (elapsed - lastHitTime < hitCooldown) continue;
 
-            foreach (var col in Physics2D.OverlapCircleAll(trapPos, 0.6f)) // enemyLayer 제거: 은신 무적 방지
+            // H-9: NonAlloc + 정적 버퍼 (별도 버퍼 — _overlapBuffer는 GetEnemiesInRadius 전용)
+            int trapHitCount = Physics2D.OverlapCircleNonAlloc(trapPos, 0.6f, _trapOverlapBuffer);
+            for (int i = 0; i < trapHitCount; i++)
             {
+                var col = _trapOverlapBuffer[i];
+                if (col == null) continue;
                 var t = col.GetComponent<PlayerController>();
                 if (t == null || t.IsDead || t.networkSync == null ||
                     t.networkSync.NetworkIsDead.Value) continue;
@@ -708,9 +716,14 @@ public static class SkillSystem
     /// <summary>SnackTime — 서버에서 대상(caster)의 모든 디버프를 제거하고 클라이언트에 전파</summary>
     private static void BroadcastRemoveAllDebuffsServer(PlayerController caster)
     {
-        caster.StatusFX.RemoveAllDebuffs();
-        // 모든 클라이언트에 즉시 전파 → 이동 잠금/스턴 등 시각 상태 동기 해제
-        caster.networkSync?.BroadcastRemoveAllDebuffs();
+        // [버그 수정] listen-server 호스트 중복 실행 방지.
+        // BroadcastRemoveAllDebuffs() 내부 ClientRpc는 호스트에서도 실행되므로
+        // 서버에서 직접 RemoveAllDebuffs()를 또 호출하면 listen-server에서 2회 실행됨.
+        // ClientRpc 한 번이면 모든 클라이언트(호스트 포함)에서 동기 적용된다.
+        if (caster.networkSync != null)
+            caster.networkSync.BroadcastRemoveAllDebuffs();
+        else
+            caster.StatusFX.RemoveAllDebuffs(); // 싱글/오프라인 폴백
     }
 
     // ════════════════════════════════════════════════════════════
@@ -808,22 +821,31 @@ public static class SkillSystem
     //  공간 탐색 유틸 — 원본 동일 유지
     // ════════════════════════════════════════════════════════════
 
+    // H-9 / H-20: 정적 버퍼 (32) — 매 호출 GC 할당 제거
+    private static readonly Collider2D[] _overlapBuffer = new Collider2D[32];
+    private static readonly Collider2D[] _trapOverlapBuffer = new Collider2D[32];
+    private static readonly List<PlayerController> _enemyBuffer = new List<PlayerController>(32);
+
     private static List<PlayerController> GetEnemiesInRadius(
         PlayerController caster, float radius, Vector2? center = null)
     {
         Vector2 pos = center ?? (Vector2)caster.transform.position;
-        var list = new List<PlayerController>();
+        _enemyBuffer.Clear();
         // enemyLayer 제거: PlayerVisibility가 은신 시 레이어를 "IgnorePointer"로 바꾸므로
         // enemyLayer(="Enemy")로 필터하면 은신 적이 피해 판정에서 완전 제외되는 버그 발생.
         // 서버 피해 판정은 레이어 무관하게 탐지하고, 아래 pc 타입·사망·팀 필터로 제한.
-        foreach (var col in Physics2D.OverlapCircleAll(pos, radius))
+        int hitCount = Physics2D.OverlapCircleNonAlloc(pos, radius, _overlapBuffer);
+        for (int i = 0; i < hitCount; i++)
         {
+            var col = _overlapBuffer[i];
+            if (col == null) continue;
             var pc = col.GetComponent<PlayerController>();
             if (pc != null && !pc.IsDead && pc != caster &&
                 pc.networkSync != null && !pc.networkSync.NetworkIsDead.Value)
-                list.Add(pc);
+                _enemyBuffer.Add(pc);
         }
-        return list;
+        // 호출자가 반환된 List를 보관/재사용하지 않으므로 정적 버퍼 직접 반환
+        return _enemyBuffer;
     }
 
     private static List<PlayerController> GetEnemiesInCone(
@@ -872,9 +894,10 @@ public static class SkillSystem
         #else
             Vector2 vel = target.Rb != null ? target.Rb.velocity : Vector2.zero;
         #endif
-        Vector2 targetFacing = vel.sqrMagnitude > 0.01f
-            ? vel.normalized
-            : -toAttacker; // 정지 중: 공격자 반대 방향(보수적 폴백)
+        // [버그 수정 X-14] 정지 시 폴백을 -toAttacker로 두면 Dot=-1로 항상 배후 판정됨.
+        // 정지 중에는 배후 여부를 판정할 수 없으므로 false 반환.
+        if (vel.sqrMagnitude <= 0.01f) return false;
+        Vector2 targetFacing = vel.normalized;
         return Vector2.Dot(targetFacing, toAttacker) < -0.5f;
     }
 }

@@ -130,11 +130,11 @@ public partial class SupabaseManager : MonoBehaviour
     /// <summary>
     /// profiles 테이블에서 유저 프로필을 조회합니다.
     /// </summary>
-    public async Task<UserProfile> GetOrCreateProfile(string userId)
+    public async Task<UserProfile> GetProfile(string userId)
     {
-        if (!IsInitialized) 
+        if (!IsInitialized)
         {
-            Debug.LogWarning("[Supabase] GetOrCreateProfile failed: Client not initialized");
+            Debug.LogWarning("[Supabase] GetProfile failed: Client not initialized");
             return null;
         }
 
@@ -238,7 +238,20 @@ public partial class SupabaseManager : MonoBehaviour
                 new Dictionary<string, object> { { "p_nickname", nickname } });
 
             if (result?.Content != null)
-                return bool.TryParse(result.Content.Trim('"'), out bool available) && available;
+            {
+                // H-5: tolerant parsing — supports raw "true", "\"true\"", and {"result":true} JSON shapes
+                string raw = result.Content.Trim().Trim('"').Replace("\\\"", "\"");
+                if (bool.TryParse(raw, out bool available)) return available;
+
+                // {"result":true} 형태 폴백
+                try
+                {
+                    var obj = Newtonsoft.Json.Linq.JObject.Parse(raw);
+                    var token = obj["result"] ?? obj["available"];
+                    if (token != null) return token.Value<bool>();
+                }
+                catch { /* ignore */ }
+            }
         }
         catch (System.Exception e)
         {
@@ -381,7 +394,8 @@ public partial class SupabaseManager : MonoBehaviour
     //  [결과창] 경기 후 피자 보상 지급
     //  DB: grant_match_rewards(p_rank int,
     //                          p_kill_count int,
-    //                          p_ad_doubled bool DEFAULT false) → integer
+    //                          p_ad_doubled bool DEFAULT false,
+    //                          p_room_id    text DEFAULT NULL) → integer
     //
     //  보상 구조 (DB 기준):
     //    1위=100, 2위=60, 3~4위=30, 5위+=10 피자
@@ -389,12 +403,14 @@ public partial class SupabaseManager : MonoBehaviour
     //    광고 시청 시 전체 2배
     //
     //  반환값: 실제 지급된 피자 수량 (결과창 UI 표시용)
+    //          0 반환 = 이미 지급되었거나 실패 (DB UNIQUE 가드)
     //  호출 위치: ResultScene 또는 InGameManager.FinishGame()
     //
-    //  ※ p_total_players 파라미터 없음 (DB에 존재하지 않음)
+    //  ※ p_room_id 를 전달하면 (player_id, room_id, ad_doubled) PK 로
+    //    DB 레벨에서 멱등성이 강제됩니다. 동일 매치 중복 호출은 자동 차단.
     // ════════════════════════════════════════════════════════════
 
-    public async Task<int> GrantMatchRewards(int rank, int killCount, bool adDoubled = false)
+    public async Task<int> GrantMatchRewards(int rank, int killCount, bool adDoubled = false, string roomId = null)
     {
         if (!IsInitialized || Client.Auth.CurrentUser == null) return 0;
 
@@ -402,7 +418,8 @@ public partial class SupabaseManager : MonoBehaviour
         {
             { "p_rank",       rank      },
             { "p_kill_count", killCount },
-            { "p_ad_doubled", adDoubled }
+            { "p_ad_doubled", adDoubled },
+            { "p_room_id",    roomId    } // null 허용 (legacy 호출 호환)
         };
 
         try
@@ -438,7 +455,8 @@ public partial class SupabaseManager : MonoBehaviour
     // ════════════════════════════════════════════════════════════
 
     /// <summary>로비 채팅 메시지 수신 시 발생하는 이벤트. (nickname, message)</summary>
-    public event System.Action<string, string> OnLobbyChatReceived;
+    // H-8: nickname, message, senderUuid (UUID 기반 자기 메시지 필터링)
+    public event System.Action<string, string, string> OnLobbyChatReceived;
 
     /// <summary>로비 접속자 목록 변경 시 발생하는 이벤트. (nicknames)</summary>
     public event System.Action<List<string>> OnLobbyPresenceUpdated;
@@ -446,6 +464,7 @@ public partial class SupabaseManager : MonoBehaviour
     private Supabase.Realtime.RealtimeChannel _lobbyChatChannel;
     private Supabase.Realtime.RealtimePresence<LobbyPresence> _lobbyPresence;
     private bool _isLobbyChannelSubscribed = false;
+    private bool _lobbyHandlersRegistered = false;
 
     /// <summary>스팸 방지: 마지막 메시지 전송 시각</summary>
     private float _lastChatSendTime = -999f;
@@ -479,7 +498,11 @@ public partial class SupabaseManager : MonoBehaviour
             if (_lobbyChatChannel == null)
             {
                 _lobbyChatChannel = Client.Realtime.Channel("lobby-chat");
+                _lobbyHandlersRegistered = false;
+            }
 
+            if (!_lobbyHandlersRegistered)
+            {
                 // Broadcast 이벤트 리스너 등록
                 var broadcast = _lobbyChatChannel.Register<LobbyChatBroadcast>();
                 broadcast.AddBroadcastEventHandler((sender, payload) =>
@@ -489,7 +512,8 @@ public partial class SupabaseManager : MonoBehaviour
                     {
                         string nick = typed?.Payload?.Nickname ?? "???";
                         string msg  = typed?.Payload?.Message  ?? "";
-                        OnLobbyChatReceived?.Invoke(nick, msg);
+                        string uuid = typed?.Payload?.SenderUuid ?? "";
+                        OnLobbyChatReceived?.Invoke(nick, msg, uuid);
                     });
                 });
 
@@ -501,6 +525,7 @@ public partial class SupabaseManager : MonoBehaviour
                 _lobbyPresence.AddPresenceEventHandler(Supabase.Realtime.Interfaces.IRealtimePresence.EventType.Sync, OnPresenceEvent);
                 _lobbyPresence.AddPresenceEventHandler(Supabase.Realtime.Interfaces.IRealtimePresence.EventType.Join, OnPresenceEvent);
                 _lobbyPresence.AddPresenceEventHandler(Supabase.Realtime.Interfaces.IRealtimePresence.EventType.Leave, OnPresenceEvent);
+                _lobbyHandlersRegistered = true;
             }
 
             await _lobbyChatChannel.Subscribe();
@@ -518,26 +543,33 @@ public partial class SupabaseManager : MonoBehaviour
     /// 로비 채팅 채널 구독을 해제합니다.
     /// 씬 전환(로비 → 인게임) 또는 앱 종료 시 호출하세요.
     /// </summary>
-    public Task UnsubscribeLobbyChat()
+    public async Task UnsubscribeLobbyChat()
     {
-        if (_lobbyChatChannel == null) return Task.CompletedTask;
+        if (_lobbyChatChannel == null) return;
 
         try
         {
-            _lobbyChatChannel.Unsubscribe();
+            await Task.Run(() =>
+            {
+                try { _lobbyChatChannel.Unsubscribe(); }
+                catch (System.Exception e)
+                {
+                    Debug.LogWarning($"[Supabase] 채팅 채널 해제 중 오류 (무시 가능): {e.Message}");
+                }
+            });
+            // 서버 처리 시간 확보
+            await Task.Delay(100);
             Debug.Log("[Supabase] 로비 채팅 채널 구독 해제");
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogWarning($"[Supabase] 채팅 채널 해제 중 오류 (무시 가능): {e.Message}");
         }
         finally
         {
-            // _lobbyChatChannel = null; // 재사용을 위해 null로 초기화하지 않음
-            // _lobbyPresence = null;
+            // M-11: Unsubscribe 이후 채널 핸들이 stale 상태가 되어 재구독 시 핸들러가
+            // 등록되지 않을 수 있으므로, null 처리하여 SubscribeLobbyChat에서 새로 생성하도록 한다.
+            _lobbyChatChannel = null;
+            _lobbyPresence = null;
+            _lobbyHandlersRegistered = false;
             _isLobbyChannelSubscribed = false;
         }
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -583,19 +615,30 @@ public partial class SupabaseManager : MonoBehaviour
 
         try
         {
-            // Supabase C# SDK 버그 우회: 
+            // Supabase C# SDK 버그 우회:
             // Broadcast 이벤트 전송 시 서버가 ACK를 반환하지 않으면 await가 영구 대기(Hang)에 빠질 수 있습니다.
             // 어차피 Broadcast는 Fire-and-forget 속성이므로, await 하지 않고 즉시 성공으로 처리합니다.
-            _ = _lobbyChatChannel.Send(
+            // H-4: ContinueWith로 비동기 예외를 캡처하여 _lastChatSendTime을 복구.
+            var sendTask = _lobbyChatChannel.Send(
                 Supabase.Realtime.Constants.ChannelEventName.Broadcast,
                 "chat_message",
                 new LobbyChatPayload
                 {
-                    Nickname  = nickname,
-                    Message   = message,
-                    Timestamp = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    Nickname   = nickname,
+                    Message    = message,
+                    Timestamp  = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    SenderUuid = GameManager.Instance?.currentPlayerId ?? "" // H-8
                 }
             );
+
+            sendTask.ContinueWith(t =>
+            {
+                if (t.IsFaulted)
+                {
+                    _lastChatSendTime = -999f;
+                    Debug.LogError($"[Supabase] 채팅 비동기 전송 실패: {t.Exception?.GetBaseException().Message}");
+                }
+            }, TaskScheduler.Default);
 
             return true;
         }
@@ -663,20 +706,20 @@ public partial class SupabaseManager : MonoBehaviour
     }
 
     /// <summary>로비 Presence를 해제합니다. DisconnectLobbyChat() 내에서 호출됩니다.</summary>
-    public Task UntrackLobbyPresence()
+    public async Task UntrackLobbyPresence()
     {
-        if (_lobbyPresence == null) return Task.CompletedTask;
+        if (_lobbyPresence == null) return;
 
-        try
+        await Task.Run(() =>
         {
-            _lobbyPresence.Untrack();
-            Debug.Log("[Supabase] Presence 해제 완료");
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogWarning($"[Supabase] Presence Untrack 실패 (무시 가능): {e.Message}");
-        }
-        return Task.CompletedTask;
+            try { _lobbyPresence.Untrack(); }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning($"[Supabase] Presence Untrack 실패 (무시 가능): {e.Message}");
+            }
+        });
+        await Task.Delay(100);
+        Debug.Log("[Supabase] Presence 해제 완료");
     }
 }
 
@@ -689,6 +732,8 @@ public class LobbyChatPayload
     [JsonProperty("nickname")]  public string Nickname  { get; set; }
     [JsonProperty("message")]   public string Message   { get; set; }
     [JsonProperty("timestamp")] public long   Timestamp { get; set; }
+    // H-8: 송신자 UUID 포함 — 동일 닉네임 충돌 시에도 자기 메시지 정확히 필터링
+    [JsonProperty("sender_uuid")] public string SenderUuid { get; set; }
 }
 
 public class LobbyChatBroadcast : Supabase.Realtime.Models.BaseBroadcast<LobbyChatPayload> { }

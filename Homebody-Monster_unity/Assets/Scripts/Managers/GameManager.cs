@@ -78,7 +78,11 @@ public class GameManager : MonoBehaviour
         gameServerIp        = null;
         gameServerPort      = 0;
         lastMatchResult     = default;
-        MatchResultSaveTask = null;
+        // M-10: 결과 저장 Task가 아직 진행 중이라면 null로 덮어쓰지 않는다.
+        // (덮어쓰면 ResultController.LoadAndDisplayRecord가 await할 핸들을 잃고
+        //  최신 전적이 누락될 수 있음.) 완료된 경우에만 안전하게 비운다.
+        if (MatchResultSaveTask == null || MatchResultSaveTask.IsCompleted)
+            MatchResultSaveTask = null;
         // [버그 수정 연동] DisconnectAsync()로 Presence 해제 완료 후 NGO Shutdown 보장.
         // 기존 Disconnect()는 fire-and-forget이라 유령 접속자가 남을 수 있었음.
         if (AppNetworkManager.Instance != null)

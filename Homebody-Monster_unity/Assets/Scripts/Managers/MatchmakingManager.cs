@@ -135,7 +135,14 @@ public class MatchmakingManager : MonoBehaviour
     private void OnDestroy()
     {
         if (!isDedicatedServerMode && isSearching)
+        {
+            // [버그 수정] OnDestroy에서 fire-and-forget CancelSearchAsync는 앱 종료 시
+            // 큐 정리가 끝나기 전에 프로세스가 사라질 수 있음.
+            // PlayerPrefs 플래그를 저장해 다음 매칭 시도에서 정리하도록 한다.
+            if (!string.IsNullOrEmpty(myPlayerId))
+                PlayerPrefs.SetInt($"PendingQueueCleanup_{myPlayerId}", 1);
             _ = CancelSearchAsync();
+        }
     }
 
     // ════════════════════════════════════════════════════════════
@@ -177,6 +184,15 @@ public class MatchmakingManager : MonoBehaviour
         }
 
         NotifyStatus("매칭 서버에 연결 중...");
+
+        // [버그 수정] 이전 세션 OnDestroy에서 정리 미완료된 큐 엔트리 회수.
+        string pendingKey = $"PendingQueueCleanup_{myPlayerId}";
+        if (PlayerPrefs.GetInt(pendingKey, 0) == 1)
+        {
+            await CleanupMyPreviousEntry();
+            PlayerPrefs.DeleteKey(pendingKey);
+        }
+
         await CleanupMyPreviousEntry();
 
         if (!await InsertQueueEntry())
@@ -357,15 +373,19 @@ public class MatchmakingManager : MonoBehaviour
 
         while (true)
         {
-            await Task.Delay(2000);
-            if (!ValidateSupabase()) continue;
             try
             {
+                await Task.Delay(2000);
+                if (!ValidateSupabase()) continue;
                 var queue = await FetchWaitingPlayers();
                 UpdatePlayerFirstSeen(queue);
                 var eligible = GetEligiblePlayers(queue);
                 if (eligible.Count >= minPlayers)
                     await ExecuteServerMatch(eligible);
+            }
+            catch (TaskCanceledException)
+            {
+                // Task.Delay 취소는 무시하고 루프 유지
             }
             catch (Exception e)
             {
@@ -451,7 +471,26 @@ public class MatchmakingManager : MonoBehaviour
                     .LoadScene("InGameScene", UnityEngine.SceneManagement.LoadSceneMode.Single);
             }
         }
-        catch (Exception e) { Debug.LogError($"[Server] 매칭 DB 업데이트 실패: {e.Message}"); }
+        catch (Exception e)
+        {
+            Debug.LogError($"[Server] 매칭 DB 업데이트 실패: {e.Message}");
+            // H-23: server_assign_match 실패 시 큐에 남은 플레이어들의 상태를
+            // 'cancelled'로 업데이트하여 무한 대기 방지.
+            try
+            {
+                var cancelParam = new Dictionary<string, object>
+                {
+                    { "p_queue_ids", players.Select(p => p.Id).ToList() },
+                    { "p_status",    "cancelled" }
+                };
+                await SupabaseManager.Instance.Client.Rpc<string>("update_queue_status", cancelParam);
+                Debug.LogWarning($"[Server] ⚠️ {players.Count}명 큐 상태를 'cancelled'로 복구");
+            }
+            catch (Exception cancelEx)
+            {
+                Debug.LogError($"[Server] 큐 상태 복구도 실패: {cancelEx.Message}");
+            }
+        }
     }
 
     // ════════════════════════════════════════════════════════════
@@ -530,6 +569,9 @@ public class MatchmakingManager : MonoBehaviour
     //  🛠 공통 내부 메서드
     // ════════════════════════════════════════════════════════════
 
+    // S-1: 이 INSERT는 matchmaking 테이블의 RLS 정책 (auth.uid() = player_id INSERT 허용)에
+    // 의존한다. RLS 정책이 누락/변경되면 항상 실패하므로 별도 SQL 마이그레이션 작업으로
+    // 정책을 검증해야 한다. (이 코드 자체는 변경하지 않음.)
     private async Task<bool> InsertQueueEntry()
     {
         try
@@ -603,7 +645,25 @@ public class MatchmakingManager : MonoBehaviour
             var param = new Dictionary<string, object> { { "p_player_id", myPlayerId } };
             await SupabaseManager.Instance.Client.Rpc<string>("leave_matchmaking_queue", param);
         }
-        catch (Exception e) { Debug.LogError($"[Matchmaking] 큐 취소 실패: {e.Message}"); }
+        catch (Exception e)
+        {
+            Debug.LogError($"[Matchmaking] 큐 취소 실패: {e.Message}");
+            // [버그 수정 X-C] RPC 실패 시 myQueueEntryId 기반 직접 DELETE 폴백.
+            if (!string.IsNullOrEmpty(myQueueEntryId))
+            {
+                try
+                {
+                    await SupabaseManager.Instance.Client
+                        .From<MatchmakingEntry>()
+                        .Where(x => x.Id == myQueueEntryId)
+                        .Delete();
+                }
+                catch (Exception e2)
+                {
+                    Debug.LogError($"[Matchmaking] 큐 엔트리 직접 삭제 실패: {e2.Message}");
+                }
+            }
+        }
     }
 
     // ════════════════════════════════════════════════════════════

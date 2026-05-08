@@ -259,6 +259,9 @@ public class NetworkRoomManager : MonoBehaviour
 
     private async void OnClickReady()
     {
+        // [버그 수정] _currentRoomId가 null/empty인 상태에서 SetMemberReady 호출 방지.
+        if (string.IsNullOrEmpty(_currentRoomId)) return;
+
         _isReady = !_isReady;
         if (readyButtonText != null)
             readyButtonText.text = _isReady ? "✅ 준비 완료" : "준비";
@@ -273,10 +276,14 @@ public class NetworkRoomManager : MonoBehaviour
     private async void OnClickStartMatch()
     {
         if (!_isHost || string.IsNullOrEmpty(_currentRoomId)) return;
+        // [버그 수정 X-H] 빠른 재클릭으로 StartPrivateRoom이 다중 진입하지 않도록 차단.
+        if (_isConnecting) return;
+        _isConnecting = true;
 
         if (_members.Count < 2)
         {
             ShowStatus("최소 2명 이상이어야 시작할 수 있습니다.");
+            _isConnecting = false;
             return;
         }
 
@@ -289,6 +296,7 @@ public class NetworkRoomManager : MonoBehaviour
         if (notReady > 0)
         {
             ShowStatus($"아직 준비 중인 플레이어가 {notReady}명 있습니다.");
+            _isConnecting = false;
             return;
         }
 
@@ -307,6 +315,7 @@ public class NetworkRoomManager : MonoBehaviour
         {
             ShowStatus("게임 시작에 실패했습니다. 다시 시도해주세요.");
             Debug.LogError("[Room] start_private_room RPC 실패");
+            _isConnecting = false;
             return;
         }
 
@@ -355,7 +364,12 @@ public class NetworkRoomManager : MonoBehaviour
         {
             _roomChannel = SupabaseManager.Instance.Client.Realtime
                 .Channel($"private_rooms:{roomId}");
-            _roomChannel.Register(new PostgresChangesOptions("public", "private_rooms"));
+            // H-15: 본인이 속한 방의 변경사항만 수신하도록 id 필터 적용 (불필요한 트래픽 방지)
+            _roomChannel.Register(new PostgresChangesOptions(
+                "public",
+                "private_rooms",
+                filter: $"id=eq.{roomId}"
+            ));
             _roomChannel.AddPostgresChangeHandler(ListenType.Updates,
                 (_, c) => MainThreadDispatcher.Enqueue(() => OnRoomUpdated(c, roomId)));
             await _roomChannel.Subscribe();

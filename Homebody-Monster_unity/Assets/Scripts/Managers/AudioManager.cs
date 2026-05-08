@@ -210,11 +210,13 @@ public class AudioManager : MonoBehaviour
         fadeIn.volume = 0f;
         if (newClip != null) fadeIn.Play();
 
+        // M-12: 인스펙터에서 0으로 설정되어도 0 나눗셈을 피하기 위해 최소값 보정
+        float fadeDur = Mathf.Max(0.01f, bgmFadeDuration);
         float elapsed = 0f;
-        while (elapsed < bgmFadeDuration)
+        while (elapsed < fadeDur)
         {
             elapsed += Time.unscaledDeltaTime;
-            float t = Mathf.Clamp01(elapsed / bgmFadeDuration);
+            float t = Mathf.Clamp01(elapsed / fadeDur);
             fadeOut.volume = Mathf.Lerp(bgmVol, 0f, t);
             if (newClip != null)
                 fadeIn.volume = Mathf.Lerp(0f, bgmVol, t);

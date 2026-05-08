@@ -119,7 +119,7 @@ public partial class SupabaseManager
             { "p_is_winner",     isWin        },
             { "p_rank",          rank         },
             { "p_kill_count",    kills        },
-            { "p_survived_time", (double)survivalSeconds }
+            { "p_survived_time", (float)survivalSeconds } // H-18
         };
 
         try

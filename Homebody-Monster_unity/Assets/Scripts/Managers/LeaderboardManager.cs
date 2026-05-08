@@ -138,20 +138,22 @@ public class LeaderboardManager : MonoBehaviour
 
         if (SupabaseManager.Instance == null) return new List<LeaderboardRecord>();
 
+        // [버그 수정 X-G] 실패와 빈 결과 구분.
+        // 실패 시 _cachedLeaderboard를 갱신하지 않고 캐시 타임스탬프도 미갱신
+        // → 다음 호출에서 즉시 재시도 가능. 정상 빈 결과만 캐시.
         try
         {
-            _cachedLeaderboard = await SupabaseManager.Instance.FetchLeaderboard();
+            var fresh = await SupabaseManager.Instance.FetchLeaderboard();
+            _cachedLeaderboard = fresh ?? new List<LeaderboardRecord>();
+            _cacheTime = Time.realtimeSinceStartup;
         }
         catch (Exception e)
         {
             Debug.LogWarning($"[LeaderboardManager] 리더보드 조회 실패: {e.Message}");
-            // [버그 수정] 조회 실패해도 캐시 타임스탬프는 갱신 (60초 캐시 유지)
-            _cachedLeaderboard ??= new List<LeaderboardRecord>();
+            // 실패 시: 캐시/타임스탬프 모두 유지 (재시도 허용)
+            return _cachedLeaderboard ?? new List<LeaderboardRecord>();
         }
 
-        // [버그 수정] 조회 성공/실패 구분 없이 _cacheTime 갱신
-        // (성공 시 진짜 데이터 캐시, 실패 시 빈 리스트 캐시하지만 둘 다 60초 유지)
-        _cacheTime = Time.realtimeSinceStartup;
         return _cachedLeaderboard;
     }
 
@@ -196,8 +198,11 @@ public class LeaderboardManager : MonoBehaviour
     private void ClearContent(Transform content)
     {
         if (content == null) return;
-        foreach (Transform child in content)
-            Destroy(child.gameObject);
+        // H-16: Destroy()는 프레임 말미까지 지연되어 RenderLeaderboard/RenderHistory가
+        // 즉시 AppendRow → Instantiate를 호출하면 이전 행과 새 행이 한 프레임 동안 공존.
+        // 물리 콜백 경로가 아닌 UI 갱신 경로이므로 DestroyImmediate 사용 가능.
+        for (int i = content.childCount - 1; i >= 0; i--)
+            DestroyImmediate(content.GetChild(i).gameObject);
     }
 
     private void AppendRow(Transform content, GameObject prefab, string text, Color color)

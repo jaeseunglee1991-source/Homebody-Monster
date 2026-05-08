@@ -53,10 +53,14 @@ public class PlayerController : NetworkBehaviour
     public StatusEffectSystem StatusFX    { get; private set; }
     public PlayerNetworkSync  networkSync { get; private set; }
 
+    public readonly NetworkVariable<bool> NetworkIsChasing = new(
+        false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
     private Vector2          moveDir;
     private PlayerController targetEnemy;
     private float            lastAttackTime = -999f;
     private bool             isChasing      = false;
+    private bool             _lastSyncedChasing = false;
     private bool             movementLocked = true;
     // [FIX] 초기 상태를 잠금(true)으로 변경. InGameManager에서 게임 시작 시 명시적으로 풀어주기 전까지 이동 불가.
     private bool             attackLocked   = true;
@@ -90,14 +94,76 @@ public class PlayerController : NetworkBehaviour
             // 동적 스폰 시 씬에 배치된 조이스틱을 자동으로 연결
             if (movementJoystick == null)
                 movementJoystick = FindFirstObjectByType<VariableJoystick>();
+
+            // [외형 동기화] Owner 는 본인 직업을 이미 알고 있으므로
+            // SubmitCharacterDataServerRpc 라운드트립 대기 없이 즉시 적용 → 깜빡임 제거.
+            if (GameManager.Instance?.myCharacterData != null)
+                UpdateVisualByJob((int)GameManager.Instance.myCharacterData.job);
+        }
+
+        // [외형 동기화] 모든 클라이언트(Owner 포함)에서 NetworkJob 구독.
+        // Late join 또는 재접속 시 OnValueChanged 가 발동되지 않을 수 있으므로
+        // 현재 값이 유효(-1 아님)하면 즉시 한 번 적용한다.
+        if (networkSync != null)
+        {
+            networkSync.NetworkJob.OnValueChanged += OnNetworkJobChanged;
+            int currentJob = networkSync.NetworkJob.Value;
+            if (currentJob >= 0) UpdateVisualByJob(currentJob);
         }
     }
 
     public override void OnNetworkDespawn()
     {
         base.OnNetworkDespawn();
+        if (networkSync != null)
+            networkSync.NetworkJob.OnValueChanged -= OnNetworkJobChanged;
+
         if (IsOwner)
             UnityEngine.InputSystem.EnhancedTouch.EnhancedTouchSupport.Disable();
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  외형 교체 (직업별)
+    //  Owner: SubmitCharacterDataServerRpc 직전 즉시 호출
+    //  Non-Owner: NetworkJob.OnValueChanged 콜백으로 호출
+    // ════════════════════════════════════════════════════════════
+
+    private void OnNetworkJobChanged(int prev, int curr)
+    {
+        if (curr < 0) return;             // 미설정 상태 무시
+        UpdateVisualByJob(curr);
+    }
+
+    public void UpdateVisualByJob(int jobIndex)
+    {
+        // 데디케이티드 서버(헤드리스) 는 시각 처리 불필요.
+        // IsServer && !IsClient 일 때만 스킵 — listen-server(Host)는 클라이언트 역할도 하므로 진행.
+        if (NetworkManager.Singleton != null
+            && NetworkManager.Singleton.IsServer
+            && !NetworkManager.Singleton.IsClient)
+            return;
+
+        // jobIndex 범위 검증 (enum 값이 0~9, -1 은 미설정)
+        if (jobIndex < 0 || jobIndex > (int)JobType.Chef) return;
+
+        // Despawn 직후 콜백 도달 가능 → 컴포넌트 null 가드
+        if (animator == null && spriteRenderer == null) return;
+
+        var registry = JobVisualRegistry.Instance;
+        if (registry == null) return; // 워닝은 Instance getter 에서 1회 출력
+
+        var visual = registry.GetVisual((JobType)jobIndex);
+        if (visual == null) return;   // 등록 안 된 직업은 기본 외형 유지 (정상 동작)
+
+        if (animator != null && visual.animatorController != null)
+        {
+            animator.runtimeAnimatorController = visual.animatorController;
+            // Controller 교체 시 현재 재생 상태가 무효화되므로 Idle 첫 프레임으로 리셋
+            animator.Rebind();
+            animator.Update(0f);
+        }
+        if (spriteRenderer != null && visual.defaultIdleSprite != null)
+            spriteRenderer.sprite = visual.defaultIdleSprite;
     }
 
     private void Start()
@@ -126,6 +192,12 @@ public class PlayerController : NetworkBehaviour
             HandleTouchAttackInput();
         }
 
+        if (IsOwner && isChasing != _lastSyncedChasing)
+        {
+            _lastSyncedChasing = isChasing;
+            SyncChasingToServer(isChasing);
+        }
+
         // [FIX] UpdateAnimation을 IsOwner 조건 밖으로 이동.
         // 기존: !IsOwner이면 UpdateAnimation()을 호출하지 않아
         //        다른 플레이어 캐릭터의 spriteRenderer.flipX가 전혀 갱신되지 않음.
@@ -141,7 +213,11 @@ public class PlayerController : NetworkBehaviour
 
         if (movementLocked)
         {
-            Rb.linearVelocity = Vector2.zero;
+            #if UNITY_6000_0_OR_NEWER
+                Rb.linearVelocity = Vector2.zero;
+            #else
+                Rb.velocity = Vector2.zero;
+            #endif
             return;
         }
 
@@ -173,11 +249,18 @@ public class PlayerController : NetworkBehaviour
     //  입력 처리 (Owner 전용)
     // ════════════════════════════════════════════════════════════
 
+    private bool _joystickLookupAttempted = false;
+
     private void HandleJoystickInput()
     {
-        if (movementJoystick == null)
+        // [버그 수정] 매 프레임 FindFirstObjectByType 호출하던 버그.
+        // 1회만 시도하고 결과를 캐시. 실패해도 재탐색하지 않음.
+        if (movementJoystick == null && !_joystickLookupAttempted)
+        {
             movementJoystick = FindFirstObjectByType<VariableJoystick>();
-            
+            _joystickLookupAttempted = true;
+        }
+
         if (movementJoystick == null) return;
         
         moveDir.x = movementJoystick.Horizontal;
@@ -440,7 +523,7 @@ public class PlayerController : NetworkBehaviour
             SpectatorManager.Instance?.EnterSpectator();
     }
 
-    public void ReviveNetwork()
+    public void ReviveNetwork(Vector2 spawnPos = default)
     {
         if (!IsDead) return;
         IsDead         = false;
@@ -448,17 +531,18 @@ public class PlayerController : NetworkBehaviour
         attackLocked   = false;
         isChasing      = false;
         targetEnemy    = null;
+        // [버그 수정 N-A] 부활 시 평타 쿨다운 리셋. 부활 직후 즉시 평타 가능하도록 함.
+        lastAttackTime = -999f;
 
         // [버그 수정] 부활 시 스폰 위치 리셋 누락.
-        // 기존 코드는 부활 후에도 사망 직전 위치에 머물게 됨.
-        // 부활자가 다른 플레이어들과 멀리 떨어진 위치에 갇혀 불리한 상황이 됨.
-        // NetworkSpawnManager의 SpawnPlayer 처리 경로를 따라
-        // 랜덤 스폰 위치로 이동시켜야 함.
+        // 서버 ExecuteReviveClientRpc가 전달한 spawnPos를 우선 사용.
         if (networkSync != null && Rb != null)
         {
-            Vector2 spawnPos = NetworkSpawnManager.Instance?.GetNextSpawnPoint() ?? Vector2.zero;
-            if (spawnPos != Vector2.zero)
-                Rb.position = spawnPos;
+            Vector2 finalPos = spawnPos != default && spawnPos != Vector2.zero
+                ? spawnPos
+                : (NetworkSpawnManager.Instance?.GetNextSpawnPoint() ?? Vector2.zero);
+            if (finalPos != Vector2.zero)
+                Rb.position = finalPos;
         }
 
         if (animator != null)
@@ -493,10 +577,22 @@ public class PlayerController : NetworkBehaviour
             ? moveDir
             : (networkSync != null ? networkSync.NetworkMoveDir.Value : Vector2.zero);
 
-        animator.SetBool("IsMoving", displayDir.sqrMagnitude > 0.01f || isChasing);
+        bool displayChasing = IsOwner ? isChasing : NetworkIsChasing.Value;
+        animator.SetBool("IsMoving", displayDir.sqrMagnitude > 0.01f || displayChasing);
         if (spriteRenderer == null) return;
         if      (displayDir.x > 0.05f)  spriteRenderer.flipX = false;
         else if (displayDir.x < -0.05f) spriteRenderer.flipX = true;
+    }
+
+    [ServerRpc]
+    private void SetChasingServerRpc(bool chasing)
+    {
+        NetworkIsChasing.Value = chasing;
+    }
+
+    private void SyncChasingToServer(bool chasing)
+    {
+        if (IsOwner && IsSpawned) SetChasingServerRpc(chasing);
     }
 
     private void OnDrawGizmosSelected()

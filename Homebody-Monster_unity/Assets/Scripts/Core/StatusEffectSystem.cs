@@ -87,21 +87,27 @@ public class StatusEffectSystem : MonoBehaviour
         var existing = effects.Find(e => e.type == type);
         if (existing != null)
         {
+            // [버그 수정 X-E] ShieldHp 재시전 시 기존 실드를 보존.
+            // existing.elapsed = 0 으로 지속시간을 리셋하고,
+            // shieldHp는 Max(currentShield, value)로 갱신해 부족분만 보충.
+            if (type == StatusEffectType.ShieldHp)
+            {
+                existing.elapsed = 0f;
+                existing.duration = Mathf.Max(existing.duration, duration);
+                existing.value = Mathf.Max(existing.value, value);
+                if (owner.myData != null)
+                    owner.myData.shieldHp = Mathf.Max(owner.myData.shieldHp, value);
+                return;
+            }
+
             // 지속시간 갱신 (서버-클라이언트 타이머 차이 보정)
             existing.duration = Mathf.Max(existing.duration, existing.elapsed + duration);
             // [FIX] 강한 효과가 약한 것으로 교체되는 버그.
-            // value(DoT 틱 데미지, Slow 비율, ShieldHp 등)는 클수록 강하므로
+            // value(DoT 틱 데미지, Slow 비율 등)는 클수록 강하므로
             // duration과 동일하게 더 강한 값만 유지.
             if (value > existing.value)
             {
                 existing.value = value;
-                // [버그 수정] ShieldHp 갱신 시 myData.shieldHp 동기화 누락.
-                // OnEffectApplied는 신규 추가 경로에서만 호출되므로,
-                // IronSkin 재시전 시 effect.value는 갱신되지만
-                // 실제 피해 흡수에 쓰이는 myData.shieldHp는 소모된 값 그대로 유지됨.
-                // 값이 실제로 교체될 때만 동기화하여 더 약한 재시전은 무시.
-                if (type == StatusEffectType.ShieldHp && owner.myData != null)
-                    owner.myData.shieldHp = value;
             }
             return;
         }
@@ -121,6 +127,13 @@ public class StatusEffectSystem : MonoBehaviour
 
     private void TickEffects()
     {
+        // [C-12] elapsed 진행 및 DoT 틱은 서버 권한.
+        // 클라이언트 틱은 deltaTime 차이로 만료 시점이 어긋나 desync를 유발하므로
+        // 서버 또는 싱글 모드(netSync == null)에서만 진행.
+        var netSync = owner.networkSync;
+        bool isAuthoritative = netSync == null || netSync.IsServer;
+        if (!isAuthoritative) return;
+
         for (int i = effects.Count - 1; i >= 0; i--)
         {
             var e = effects[i];
@@ -229,7 +242,9 @@ public class StatusEffectSystem : MonoBehaviour
             case StatusEffectType.Root:
                 if (!IsRooted) owner.SetMovementLocked(false); break;
             case StatusEffectType.IceShield:
-                owner.SetMovementLocked(false);
+                // [버그 수정] IceShield 만료 시 다른 잠금 효과(Stun/Root) 무시하고
+                // 이동/공격 잠금을 풀어버리는 버그. 다른 활성 잠금 확인 후 해제.
+                if (!IsRooted && !IsStunned) owner.SetMovementLocked(false);
                 owner.SetAttackLocked(false); break;
             case StatusEffectType.Stealth:
                 if (owner.myData != null) owner.myData.stealthFirstAttack = false;
