@@ -252,8 +252,12 @@ public static class SkillSystem
                     if (el >= next)
                     {
                         next += 0.5f;
+                        // [버그 수정 R-13] cData 캡처 대신 루프 내 ServerData를 직접 참조.
+                        // 캡처된 cData는 Despawn/재생성 시 stale 가능 — 매 틱 최신값으로 안전 조회.
+                        var liveData = caster.networkSync.ServerData;
+                        if (liveData == null) yield break;
                         foreach (var t in GetEnemiesInRadius(caster, 2.0f))
-                            DealSkillDamageServer(caster, t, cData.baseAtk * 0.5f);
+                            DealSkillDamageServer(caster, t, liveData.baseAtk * 0.5f);
                     }
                     yield return null;
                 }
@@ -712,9 +716,14 @@ public static class SkillSystem
     /// <summary>SnackTime — 서버에서 대상(caster)의 모든 디버프를 제거하고 클라이언트에 전파</summary>
     private static void BroadcastRemoveAllDebuffsServer(PlayerController caster)
     {
-        caster.StatusFX.RemoveAllDebuffs();
-        // 모든 클라이언트에 즉시 전파 → 이동 잠금/스턴 등 시각 상태 동기 해제
-        caster.networkSync?.BroadcastRemoveAllDebuffs();
+        // [버그 수정] listen-server 호스트 중복 실행 방지.
+        // BroadcastRemoveAllDebuffs() 내부 ClientRpc는 호스트에서도 실행되므로
+        // 서버에서 직접 RemoveAllDebuffs()를 또 호출하면 listen-server에서 2회 실행됨.
+        // ClientRpc 한 번이면 모든 클라이언트(호스트 포함)에서 동기 적용된다.
+        if (caster.networkSync != null)
+            caster.networkSync.BroadcastRemoveAllDebuffs();
+        else
+            caster.StatusFX.RemoveAllDebuffs(); // 싱글/오프라인 폴백
     }
 
     // ════════════════════════════════════════════════════════════
@@ -885,9 +894,10 @@ public static class SkillSystem
         #else
             Vector2 vel = target.Rb != null ? target.Rb.velocity : Vector2.zero;
         #endif
-        Vector2 targetFacing = vel.sqrMagnitude > 0.01f
-            ? vel.normalized
-            : -toAttacker; // 정지 중: 공격자 반대 방향(보수적 폴백)
+        // [버그 수정 X-14] 정지 시 폴백을 -toAttacker로 두면 Dot=-1로 항상 배후 판정됨.
+        // 정지 중에는 배후 여부를 판정할 수 없으므로 false 반환.
+        if (vel.sqrMagnitude <= 0.01f) return false;
+        Vector2 targetFacing = vel.normalized;
         return Vector2.Dot(targetFacing, toAttacker) < -0.5f;
     }
 }

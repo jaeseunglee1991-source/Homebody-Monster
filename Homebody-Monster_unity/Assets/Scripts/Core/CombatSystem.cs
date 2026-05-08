@@ -136,17 +136,25 @@ public class CombatSystem : MonoBehaviour
         if (attackerFX != null && attackerFX.IsInUndyingRage)
             attacker.currentHp = Mathf.Min(attacker.currentHp + dealtDamage * 0.5f, attacker.maxHp);
 
-        // ── 가시갑옥 반사 ─────────────────────────────────────
-        float thornsRate = cfg != null ? cfg.ThornsReflectRate : 0.1f;
-        float thornsMin  = cfg != null ? cfg.ThornsReflectMin  : 0.5f;
-        if (defender.HasPassive(PassiveSkillType.Thorns))
-        {
-            float reflectDmg = Mathf.Max(thornsMin, dealtDamage * thornsRate);
-            attacker.currentHp = Mathf.Max(0f, attacker.currentHp - reflectDmg);
-        }
+        // [버그 수정 X-F] Thorns 반사를 직접 HP 차감에서 분리 — CalculateThornsReflect()로 이전.
+        // 호출 측(RequestAttackServerRpc)에서 ApplyDamageServer 파이프라인으로 처리.
 
         defender.lastCombatTime = Time.time;
         attacker.lastCombatTime = Time.time;
+    }
+
+    /// <summary>
+    /// [X-F] 가시갑옥 반사 데미지 계산 — 정상 데미지 파이프라인용.
+    /// 무한 반사 방지를 위해 호출 측에서 ApplyDamageServer 시 재발동 차단 플래그 사용.
+    /// </summary>
+    public static float CalculateThornsReflect(CharacterData defender, float dealtDamage)
+    {
+        if (dealtDamage <= 0f) return 0f;
+        if (!defender.HasPassive(PassiveSkillType.Thorns)) return 0f;
+        var cfg = Cfg;
+        float thornsRate = cfg != null ? cfg.ThornsReflectRate : 0.1f;
+        float thornsMin  = cfg != null ? cfg.ThornsReflectMin  : 0.5f;
+        return Mathf.Max(thornsMin, dealtDamage * thornsRate);
     }
 
     /// <summary>불굴 패시브: 즉사 방지</summary>

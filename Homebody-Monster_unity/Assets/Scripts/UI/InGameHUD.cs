@@ -201,6 +201,11 @@ public class InGameHUD : MonoBehaviour
         if (cooldownTimers == null) return;
         for (int i = 0; i < cooldownTimers.Length; i++)
         {
+            // [버그 수정] 비활성 스킬 버튼은 순회 스킵 — 슬롯에 스킬이 없는 버튼의 쿨다운/UI 갱신 방지.
+            if (skillButtons != null && i < skillButtons.Length && skillButtons[i] != null
+                && !skillButtons[i].gameObject.activeSelf)
+                continue;
+
             if (cooldownTimers[i] > 0f)
                 cooldownTimers[i] = Mathf.Max(0f, cooldownTimers[i] - Time.deltaTime);
             if (skillCooldownFills != null && i < skillCooldownFills.Length && skillCooldownFills[i] != null)

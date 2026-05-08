@@ -138,20 +138,22 @@ public class LeaderboardManager : MonoBehaviour
 
         if (SupabaseManager.Instance == null) return new List<LeaderboardRecord>();
 
+        // [버그 수정 X-G] 실패와 빈 결과 구분.
+        // 실패 시 _cachedLeaderboard를 갱신하지 않고 캐시 타임스탬프도 미갱신
+        // → 다음 호출에서 즉시 재시도 가능. 정상 빈 결과만 캐시.
         try
         {
-            _cachedLeaderboard = await SupabaseManager.Instance.FetchLeaderboard();
+            var fresh = await SupabaseManager.Instance.FetchLeaderboard();
+            _cachedLeaderboard = fresh ?? new List<LeaderboardRecord>();
+            _cacheTime = Time.realtimeSinceStartup;
         }
         catch (Exception e)
         {
             Debug.LogWarning($"[LeaderboardManager] 리더보드 조회 실패: {e.Message}");
-            // [버그 수정] 조회 실패해도 캐시 타임스탬프는 갱신 (60초 캐시 유지)
-            _cachedLeaderboard ??= new List<LeaderboardRecord>();
+            // 실패 시: 캐시/타임스탬프 모두 유지 (재시도 허용)
+            return _cachedLeaderboard ?? new List<LeaderboardRecord>();
         }
 
-        // [버그 수정] 조회 성공/실패 구분 없이 _cacheTime 갱신
-        // (성공 시 진짜 데이터 캐시, 실패 시 빈 리스트 캐시하지만 둘 다 60초 유지)
-        _cacheTime = Time.realtimeSinceStartup;
         return _cachedLeaderboard;
     }
 

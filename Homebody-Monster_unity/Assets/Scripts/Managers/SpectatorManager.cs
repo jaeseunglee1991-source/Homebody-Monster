@@ -141,8 +141,9 @@ public class SpectatorManager : MonoBehaviour
 
         if (InGameManager.Instance == null) return;
 
-        // alivePlayers에서 로컬 플레이어 제외
-        foreach (var p in FindObjectsByType<PlayerController>(FindObjectsSortMode.None))
+        // [버그 수정 N-E] 매 초 FindObjectsByType<PlayerController> 호출 제거.
+        // InGameManager.AlivePlayers를 사용하여 GC/검색 부하 감소.
+        foreach (var p in InGameManager.Instance.AlivePlayers)
         {
             if (p == null || p.IsDead) continue;
             if (p.IsLocalPlayer) continue;

@@ -44,6 +44,7 @@ public class InGameManager : MonoBehaviour
 
     /// <summary>현재 생존 중인 플레이어 수. 2명 이하이면 부활권 사용 불가.</summary>
     public int AliveCount => alivePlayers.Count;
+    public IReadOnlyList<PlayerController> AlivePlayers => alivePlayers;
 
     private readonly List<PlayerController> alivePlayers = new List<PlayerController>();
     // 클라이언트ID별 최종 순위 — OnPlayerDied 시점에 기록 (FinishGame 호출 시 alivePlayers.Count=1로 역산 불가)
@@ -287,6 +288,13 @@ public class InGameManager : MonoBehaviour
         float extraWait = 0f;
         while (alivePlayers.Count < maxPlayers && extraWait < 3f)
         {
+            // [버그 수정 X-I] alivePlayers 외에 NetworkSpawnManager의 spawned/alive 수도 확인하여
+            // 더 빠르게 시작 판정 — alivePlayers 등록이 늦은 경우의 불필요한 대기 단축.
+            int spawnedCount = NetworkSpawnManager.Instance != null
+                ? NetworkSpawnManager.Instance.GetAliveCount()
+                : 0;
+            if (spawnedCount >= maxPlayers) break;
+
             BroadcastOrShowMessage($"게임 준비 중... ({alivePlayers.Count}/{maxPlayers})");
             yield return new WaitForSeconds(1f);
             extraWait += 1f;
@@ -510,9 +518,25 @@ public class InGameManager : MonoBehaviour
         yield return new WaitForSeconds(2f);
 
         // ── NGO SceneManager로 전체 씬 전환 ────────────────────────
+        // [버그 수정 X-A] netMgr이 없거나 SceneManager.LoadScene이 실패하면
+        // GameManager.LoadScene(SceneResult)로 폴백 — 데디케이티드 서버 정상 정리.
         var netMgr = Unity.Netcode.NetworkManager.Singleton;
-        if (netMgr != null && netMgr.IsServer)
-            netMgr.SceneManager.LoadScene(GameManager.SceneResult, LoadSceneMode.Single);
+        bool ngoLoaded = false;
+        try
+        {
+            if (netMgr != null && netMgr.IsServer)
+            {
+                netMgr.SceneManager.LoadScene(GameManager.SceneResult, LoadSceneMode.Single);
+                ngoLoaded = true;
+            }
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogWarning($"[InGameManager] NGO SceneManager.LoadScene 실패: {e.Message}");
+        }
+
+        if (!ngoLoaded)
+            GameManager.Instance?.LoadScene(GameManager.SceneResult);
     }
 
     private PlayerController GetHighestHpPlayer()

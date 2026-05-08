@@ -187,11 +187,18 @@ public class PlayerController : NetworkBehaviour
     //  입력 처리 (Owner 전용)
     // ════════════════════════════════════════════════════════════
 
+    private bool _joystickLookupAttempted = false;
+
     private void HandleJoystickInput()
     {
-        if (movementJoystick == null)
+        // [버그 수정] 매 프레임 FindFirstObjectByType 호출하던 버그.
+        // 1회만 시도하고 결과를 캐시. 실패해도 재탐색하지 않음.
+        if (movementJoystick == null && !_joystickLookupAttempted)
+        {
             movementJoystick = FindFirstObjectByType<VariableJoystick>();
-            
+            _joystickLookupAttempted = true;
+        }
+
         if (movementJoystick == null) return;
         
         moveDir.x = movementJoystick.Horizontal;
@@ -454,7 +461,7 @@ public class PlayerController : NetworkBehaviour
             SpectatorManager.Instance?.EnterSpectator();
     }
 
-    public void ReviveNetwork()
+    public void ReviveNetwork(Vector2 spawnPos = default)
     {
         if (!IsDead) return;
         IsDead         = false;
@@ -462,17 +469,18 @@ public class PlayerController : NetworkBehaviour
         attackLocked   = false;
         isChasing      = false;
         targetEnemy    = null;
+        // [버그 수정 N-A] 부활 시 평타 쿨다운 리셋. 부활 직후 즉시 평타 가능하도록 함.
+        lastAttackTime = -999f;
 
         // [버그 수정] 부활 시 스폰 위치 리셋 누락.
-        // 기존 코드는 부활 후에도 사망 직전 위치에 머물게 됨.
-        // 부활자가 다른 플레이어들과 멀리 떨어진 위치에 갇혀 불리한 상황이 됨.
-        // NetworkSpawnManager의 SpawnPlayer 처리 경로를 따라
-        // 랜덤 스폰 위치로 이동시켜야 함.
+        // 서버 ExecuteReviveClientRpc가 전달한 spawnPos를 우선 사용.
         if (networkSync != null && Rb != null)
         {
-            Vector2 spawnPos = NetworkSpawnManager.Instance?.GetNextSpawnPoint() ?? Vector2.zero;
-            if (spawnPos != Vector2.zero)
-                Rb.position = spawnPos;
+            Vector2 finalPos = spawnPos != default && spawnPos != Vector2.zero
+                ? spawnPos
+                : (NetworkSpawnManager.Instance?.GetNextSpawnPoint() ?? Vector2.zero);
+            if (finalPos != Vector2.zero)
+                Rb.position = finalPos;
         }
 
         if (animator != null)

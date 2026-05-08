@@ -135,7 +135,14 @@ public class MatchmakingManager : MonoBehaviour
     private void OnDestroy()
     {
         if (!isDedicatedServerMode && isSearching)
+        {
+            // [버그 수정] OnDestroy에서 fire-and-forget CancelSearchAsync는 앱 종료 시
+            // 큐 정리가 끝나기 전에 프로세스가 사라질 수 있음.
+            // PlayerPrefs 플래그를 저장해 다음 매칭 시도에서 정리하도록 한다.
+            if (!string.IsNullOrEmpty(myPlayerId))
+                PlayerPrefs.SetInt($"PendingQueueCleanup_{myPlayerId}", 1);
             _ = CancelSearchAsync();
+        }
     }
 
     // ════════════════════════════════════════════════════════════
@@ -177,6 +184,15 @@ public class MatchmakingManager : MonoBehaviour
         }
 
         NotifyStatus("매칭 서버에 연결 중...");
+
+        // [버그 수정] 이전 세션 OnDestroy에서 정리 미완료된 큐 엔트리 회수.
+        string pendingKey = $"PendingQueueCleanup_{myPlayerId}";
+        if (PlayerPrefs.GetInt(pendingKey, 0) == 1)
+        {
+            await CleanupMyPreviousEntry();
+            PlayerPrefs.DeleteKey(pendingKey);
+        }
+
         await CleanupMyPreviousEntry();
 
         if (!await InsertQueueEntry())
@@ -629,7 +645,25 @@ public class MatchmakingManager : MonoBehaviour
             var param = new Dictionary<string, object> { { "p_player_id", myPlayerId } };
             await SupabaseManager.Instance.Client.Rpc<string>("leave_matchmaking_queue", param);
         }
-        catch (Exception e) { Debug.LogError($"[Matchmaking] 큐 취소 실패: {e.Message}"); }
+        catch (Exception e)
+        {
+            Debug.LogError($"[Matchmaking] 큐 취소 실패: {e.Message}");
+            // [버그 수정 X-C] RPC 실패 시 myQueueEntryId 기반 직접 DELETE 폴백.
+            if (!string.IsNullOrEmpty(myQueueEntryId))
+            {
+                try
+                {
+                    await SupabaseManager.Instance.Client
+                        .From<MatchmakingEntry>()
+                        .Where(x => x.Id == myQueueEntryId)
+                        .Delete();
+                }
+                catch (Exception e2)
+                {
+                    Debug.LogError($"[Matchmaking] 큐 엔트리 직접 삭제 실패: {e2.Message}");
+                }
+            }
+        }
     }
 
     // ════════════════════════════════════════════════════════════

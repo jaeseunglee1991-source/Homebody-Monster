@@ -257,7 +257,9 @@ public class ResultController : MonoBehaviour
 
         MatchResult result = GameManager.Instance.lastMatchResult;
 
-        var task = SupabaseManager.Instance.GrantMatchRewards(result.rank, result.killCount, false);
+        // [멱등성] roomId 전달 시 DB PK(player_id, room_id, ad_doubled=false) 충돌로 중복 지급 자동 차단
+        var task = SupabaseManager.Instance.GrantMatchRewards(
+            result.rank, result.killCount, false, GameManager.Instance.currentRoomId);
         while (!task.IsCompleted) yield return null;
 
         _earnedPizza = task.Result;
@@ -411,8 +413,9 @@ public class ResultController : MonoBehaviour
 
         MatchResult result = GameManager.Instance.lastMatchResult;
 
-        // DB에 광고 2배 보상 요청
-        var task = SupabaseManager.Instance.GrantMatchRewards(result.rank, result.killCount, true);
+        // DB에 광고 2배 보상 요청 — roomId 전달로 (player_id, room_id, ad_doubled=true) PK 멱등성
+        var task = SupabaseManager.Instance.GrantMatchRewards(
+            result.rank, result.killCount, true, GameManager.Instance.currentRoomId);
         while (!task.IsCompleted) yield return null;
 
         int bonusPizza = task.Result;

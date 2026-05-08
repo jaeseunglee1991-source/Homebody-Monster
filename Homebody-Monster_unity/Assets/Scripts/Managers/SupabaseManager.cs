@@ -394,7 +394,8 @@ public partial class SupabaseManager : MonoBehaviour
     //  [결과창] 경기 후 피자 보상 지급
     //  DB: grant_match_rewards(p_rank int,
     //                          p_kill_count int,
-    //                          p_ad_doubled bool DEFAULT false) → integer
+    //                          p_ad_doubled bool DEFAULT false,
+    //                          p_room_id    text DEFAULT NULL) → integer
     //
     //  보상 구조 (DB 기준):
     //    1위=100, 2위=60, 3~4위=30, 5위+=10 피자
@@ -402,12 +403,14 @@ public partial class SupabaseManager : MonoBehaviour
     //    광고 시청 시 전체 2배
     //
     //  반환값: 실제 지급된 피자 수량 (결과창 UI 표시용)
+    //          0 반환 = 이미 지급되었거나 실패 (DB UNIQUE 가드)
     //  호출 위치: ResultScene 또는 InGameManager.FinishGame()
     //
-    //  ※ p_total_players 파라미터 없음 (DB에 존재하지 않음)
+    //  ※ p_room_id 를 전달하면 (player_id, room_id, ad_doubled) PK 로
+    //    DB 레벨에서 멱등성이 강제됩니다. 동일 매치 중복 호출은 자동 차단.
     // ════════════════════════════════════════════════════════════
 
-    public async Task<int> GrantMatchRewards(int rank, int killCount, bool adDoubled = false)
+    public async Task<int> GrantMatchRewards(int rank, int killCount, bool adDoubled = false, string roomId = null)
     {
         if (!IsInitialized || Client.Auth.CurrentUser == null) return 0;
 
@@ -415,7 +418,8 @@ public partial class SupabaseManager : MonoBehaviour
         {
             { "p_rank",       rank      },
             { "p_kill_count", killCount },
-            { "p_ad_doubled", adDoubled }
+            { "p_ad_doubled", adDoubled },
+            { "p_room_id",    roomId    } // null 허용 (legacy 호출 호환)
         };
 
         try

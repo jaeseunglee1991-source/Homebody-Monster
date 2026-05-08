@@ -89,6 +89,8 @@ public class PlayerNetworkSync : NetworkBehaviour
     private string             _serverUserId;
     private float              _lastAttackTime = -999f;
     private PlayerNetworkSync  _pendingKiller  = null;
+    // [X-F] Thorns 반사 재진입 차단 플래그 (반사 데미지가 또 반사되는 것 방지)
+    private bool _thornsReflecting = false;
     // 스킬별 마지막 사용 시각 — 악의적 클라이언트의 쿨다운 무시 RPC 반복 전송 방지
     private readonly Dictionary<ActiveSkillType, float> _skillLastUsed =
         new Dictionary<ActiveSkillType, float>();
@@ -194,8 +196,11 @@ public class PlayerNetworkSync : NetworkBehaviour
     {
         if (_controller.myData != null) _controller.myData.currentHp = curr;
         if (!IsOwner) return;
-        if (!_hudInitialized && InGameHUD.Instance != null && _controller.myData != null)
+        if (!_hudInitialized && InGameHUD.Instance != null && _controller.myData != null
+            && _controller.myData.activeSkills != null && _controller.myData.activeSkills.Count > 0)
         {
+            // [버그 수정] activeSkills가 비어있는 시점에 InitPlayerUI 호출 시 스킬 버튼 미초기화.
+            // myData가 채워졌더라도 activeSkills.Count > 0 검증 후 호출.
             InGameHUD.Instance.InitPlayerUI(_controller);
             _hudInitialized = true;
         }
@@ -353,7 +358,7 @@ public class PlayerNetworkSync : NetworkBehaviour
 
         if (!result.isEvaded && !result.isDivineGraceBlocked && result.finalDamage > 0f)
         {
-            // PostDamageEffects: 흡혈(공격자 HP 회복), 가시갑옥(공격자 HP 감소), lastCombatTime 등 처리
+            // PostDamageEffects: 흡혈(공격자 HP 회복), lastCombatTime 등 처리 (Thorns 분리됨)
             CombatSystem.PostDamageEffects(_serverData, targetSync._serverData, attackerFx, targetFx, result.finalDamage);
             NetworkHp.Value = Mathf.Clamp(_serverData.currentHp, 0f, NetworkMaxHp.Value);
         }
@@ -368,14 +373,18 @@ public class PlayerNetworkSync : NetworkBehaviour
             ProcessDeath(targetSync, attackerFx, targetFx);
         }
 
-        // [버그 수정] 2순위: 가시갑옥(Thorns) 반사로 공격자 HP가 0 이하가 된 경우
-        // PostDamageEffects는 _serverData.currentHp만 수정하므로 ProcessDeath가 호출되지 않았음.
-        // 원래 공격 데미지를 타겟에게 적용한 이후에 순차적으로 처리합니다.
-        // (공격자가 Thorns로 죽어도 원래 타격은 이미 위에서 타겟에 반영됨)
-        if (NetworkHp.Value <= 0f && !NetworkIsDead.Value)
+        // [버그 수정 X-F] Thorns 반사를 정상 데미지 파이프라인(ApplyDamageServer)으로 처리.
+        // 무한 반사 방지를 위해 _thornsReflecting 플래그로 재진입 차단.
+        if (!result.isEvaded && !result.isDivineGraceBlocked && result.finalDamage > 0f
+            && !_thornsReflecting)
         {
-            NetworkIsDead.Value = true;
-            targetSync.ProcessDeath(this, targetFx, attackerFx);
+            float reflect = CombatSystem.CalculateThornsReflect(targetSync._serverData, result.finalDamage);
+            if (reflect > 0f)
+            {
+                _thornsReflecting = true;
+                try { ApplyDamageServer(reflect, targetSync); }
+                finally { _thornsReflecting = false; }
+            }
         }
     }
 
@@ -528,8 +537,9 @@ public class PlayerNetworkSync : NetworkBehaviour
         if (!_hasUsedRevive && !_isProcessingRevive)
         {
             _hasUsedRevive = true;
-            FinalizeDeath(this);
+            // [버그 수정 X-B] 순서 변경 — ReviveDeniedClientRpc 먼저(UI 닫고), 그 후 FinalizeDeath.
             ReviveDeniedClientRpc();
+            FinalizeDeath(this);
         }
     }
 
@@ -682,7 +692,12 @@ public class PlayerNetworkSync : NetworkBehaviour
         InGameManager.Instance?.OnReviveTicketUsed();
         InGameManager.Instance?.OnPlayerRevived(_controller);
 
-        ExecuteReviveClientRpc();
+        // [버그 수정] 부활 위치를 서버에서 결정하여 모든 클라이언트가 동일 위치를 보도록 전달.
+        // 이전에는 클라이언트가 각자 GetNextSpawnPoint()를 호출하여 desync 가능.
+        Vector2 spawnPos = NetworkSpawnManager.Instance != null
+            ? NetworkSpawnManager.Instance.GetNextSpawnPoint()
+            : Vector2.zero;
+        ExecuteReviveClientRpc(spawnPos);
     }
 
     [ServerRpc]
@@ -697,9 +712,9 @@ public class PlayerNetworkSync : NetworkBehaviour
     }
 
     [ClientRpc]
-    private void ExecuteReviveClientRpc()
+    private void ExecuteReviveClientRpc(Vector2 spawnPos)
     {
-        _controller.ReviveNetwork();
+        _controller.ReviveNetwork(spawnPos);
     }
 
     [ClientRpc]
@@ -1153,6 +1168,9 @@ public class PlayerNetworkSync : NetworkBehaviour
 
                 float chainDmg = Mathf.Round(explosionDamage * 0.6f * 10f) / 10f;
                 if (chainDmg <= 0f) continue;
+                // [버그 수정] 체이닝 사망 시 킬 크레딧이 원래 caster에게 귀속되도록
+                // _pendingKiller를 ApplyDamageServer 호출 직전에 설정.
+                pc.networkSync._pendingKiller = casterSync;
                 pc.networkSync.ApplyDamageServer(chainDmg, casterSync);
             }
         }

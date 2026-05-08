@@ -1,7 +1,40 @@
 -- ================================================================
 --  Homebody-Monster  — Supabase 스키마 정의
 --  실행 방법: Supabase Dashboard > SQL Editor에 붙여넣고 실행
+--
+--  ⚠️ 운영 DB (project: khvimlswbbmxcxpjkkes) 가 SOURCE OF TRUTH 입니다.
+--  본 파일의 일부 컬럼명/타입은 운영 DB 와 다를 수 있으며,
+--  실제 적용된 마이그레이션은 Supabase Dashboard 의 migrations 탭을 참조하세요.
+--  운영 DB 와 다른 부분 (예시):
+--    - match_history.player_id (본 파일은 user_id 로 표기됨)
+--    - match_history.created_at (본 파일은 played_at 로 표기됨)
+--    - matchmaking_queue 에 room_id 컬럼 존재, updated_at 없음
 -- ================================================================
+
+-- ────────────────────────────────────────────────────────────────
+--  [멱등성 마이그레이션 — 운영 DB 적용 완료, 2026-05-08]
+--  매치 보상 중복 지급 차단을 위해 (player_id, room_id, ad_doubled) 추적.
+-- ────────────────────────────────────────────────────────────────
+-- ALTER TABLE public.match_history
+--     ADD CONSTRAINT match_history_player_room_unique UNIQUE (player_id, room_id);
+--
+-- CREATE TABLE IF NOT EXISTS public.match_reward_grants (
+--     player_id   UUID    NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+--     room_id     TEXT    NOT NULL,
+--     ad_doubled  BOOLEAN NOT NULL DEFAULT false,
+--     pizza_paid  INT     NOT NULL,
+--     granted_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+--     PRIMARY KEY (player_id, room_id, ad_doubled)
+-- );
+-- ALTER TABLE public.match_reward_grants ENABLE ROW LEVEL SECURITY;
+-- CREATE POLICY "reward_grants_select_own"
+--     ON public.match_reward_grants FOR SELECT USING (auth.uid() = player_id);
+--
+-- grant_match_rewards 시그니처:
+--   (p_rank int, p_kill_count int, p_ad_doubled bool DEFAULT false, p_room_id text DEFAULT NULL)
+--   p_room_id 전달 시 PK 충돌로 INSERT 0행이면 0 반환 (멱등).
+--   p_room_id NULL 이면 legacy 동작 (멱등성 없음, 호환성 유지).
+-- ────────────────────────────────────────────────────────────────
 
 -- ── 1. profiles (기존 테이블, 이미 있으면 skip) ─────────────────
 CREATE TABLE IF NOT EXISTS public.profiles (
