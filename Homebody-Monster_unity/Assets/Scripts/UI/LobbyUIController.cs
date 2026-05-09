@@ -30,6 +30,11 @@ public class LobbyUIController : MonoBehaviour
     public TextMeshProUGUI chatLogText;
     public TMP_InputField  chatInputField;
     public Button          sendChatButton;     // 채팅 전송 버튼 (모바일 터치용)
+
+    // [버그 수정] 채팅 전송 버튼은 채널 구독 완료 + 닉네임 로드 두 조건을 모두 만족할 때만 활성화.
+    // 둘 중 닉네임 로드가 늦으면 currentPlayerNickname=null 상태로 전송 → "???" 표시되는 버그 방지.
+    private bool _isNicknameLoaded = false;
+    private bool _isChatReady      = false;
     public Button          startMatchButton;
     public ScrollRect      chatScrollRect;     // 채팅 로그 스크롤 영역 (Inspector 연결)
 
@@ -184,6 +189,10 @@ public class LobbyUIController : MonoBehaviour
 
             // Supabase Presence 등록 — 닉네임 확보 후 호출해야 올바른 식별자로 등록됨
             AppNetworkManager.Instance?.TrackLobbyPresence(profile.Nickname);
+
+            // 닉네임 로드 완료 → 채널 준비도 끝났다면 전송 버튼 활성화
+            _isNicknameLoaded = true;
+            TryActivateChatButton();
         }
     }
 
@@ -328,10 +337,15 @@ public class LobbyUIController : MonoBehaviour
     /// </summary>
     private void HandleLobbyChatReady()
     {
-        if (sendChatButton != null)
-            sendChatButton.interactable = true;
-
+        _isChatReady = true;
+        TryActivateChatButton();
         UpdateChatUI("[시스템]: 채팅 연결되었습니다.");
+    }
+
+    private void TryActivateChatButton()
+    {
+        if (sendChatButton != null)
+            sendChatButton.interactable = _isNicknameLoaded && _isChatReady;
     }
 
     // ── 버튼 클릭 이벤트 ──────────────────────────────────────

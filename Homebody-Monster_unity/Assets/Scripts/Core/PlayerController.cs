@@ -537,14 +537,11 @@ public class PlayerController : NetworkBehaviour
         lastAttackTime = -999f;
 
         // [버그 수정] 부활 시 스폰 위치 리셋 누락.
-        // 서버 ExecuteReviveClientRpc가 전달한 spawnPos를 우선 사용.
-        if (networkSync != null && Rb != null)
+        // 서버 ExecuteReviveClientRpc가 전달한 spawnPos만 사용.
+        // NetworkSpawnManager.Instance는 클라이언트에서 항상 null이므로 폴백 불가 — 0,0 고정 버그 방지.
+        if (networkSync != null && Rb != null && spawnPos != default && spawnPos != Vector2.zero)
         {
-            Vector2 finalPos = spawnPos != default && spawnPos != Vector2.zero
-                ? spawnPos
-                : (NetworkSpawnManager.Instance?.GetNextSpawnPoint() ?? Vector2.zero);
-            if (finalPos != Vector2.zero)
-                Rb.position = finalPos;
+            Rb.position = spawnPos;
         }
 
         if (animator != null)

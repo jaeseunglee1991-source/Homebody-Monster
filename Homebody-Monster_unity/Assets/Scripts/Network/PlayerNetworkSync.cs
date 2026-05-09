@@ -175,6 +175,33 @@ public class PlayerNetworkSync : NetworkBehaviour
         // (OnValueChanged는 값이 바뀔 때만 호출되므로 초기값은 수동 적용 필요)
         if (!NetworkNickname.Value.IsEmpty)
             HandleNicknameChanged(default, NetworkNickname.Value);
+
+        // [버그 수정 #C] HUD 초기화 누락 방지 워치독.
+        // HandleHpChanged 콜백은 NetworkHp 값이 실제로 변할 때만 발화하므로
+        // (myData 도달 전 NetworkHp 동기화 → 이후 HP 변동 없음) 시 HUD 영구 미초기화.
+        // 매 프레임 폴링하여 myData/HUD 준비되면 1회 초기화 후 종료.
+        if (IsOwner) StartCoroutine(EnsureHudInitializedRoutine());
+    }
+
+    private System.Collections.IEnumerator EnsureHudInitializedRoutine()
+    {
+        float deadline = Time.time + 10f;
+        while (Time.time < deadline)
+        {
+            if (_hudInitialized) yield break;
+            if (InGameHUD.Instance != null
+                && _controller != null
+                && _controller.myData != null
+                && _controller.myData.activeSkills != null
+                && _controller.myData.activeSkills.Count > 0)
+            {
+                InGameHUD.Instance.InitPlayerUI(_controller);
+                InGameHUD.Instance.UpdateHealthBar(NetworkHp.Value, NetworkMaxHp.Value);
+                _hudInitialized = true;
+                yield break;
+            }
+            yield return null;
+        }
     }
 
     public override void OnNetworkDespawn()

@@ -19,8 +19,9 @@ public class InGameManager : MonoBehaviour
     public static InGameManager Instance { get; private set; }
 
     // ── 매치 전체에서 공유되는 부활권 제한 ────────────────────
-    /// <summary>한 매치에서 전체 플레이어가 공유하는 최대 부활 횟수</summary>
-    public const int MaxMatchReviveCount = 3;
+    /// <summary>한 매치에서 전체 플레이어가 공유하는 최대 부활 횟수.
+    /// GameBalanceConfig.ReviveMaxPerMatch가 단일 소스이며, Inspector에서 조정 가능.</summary>
+    public static int MaxMatchReviveCount => GameBalanceConfig.Get().ReviveMaxPerMatch;
 
     [Header("Game Settings")]
     public int minPlayers = 2;

@@ -339,7 +339,8 @@ public class StatusEffectSystem : MonoBehaviour
         t == StatusEffectType.Slow     || t == StatusEffectType.Stun   ||
         t == StatusEffectType.Root     || t == StatusEffectType.Poison  ||
         t == StatusEffectType.Bleed    || t == StatusEffectType.Burn    ||
-        t == StatusEffectType.AtkReduction || t == StatusEffectType.Knockback;
+        t == StatusEffectType.AtkReduction || t == StatusEffectType.Knockback ||
+        t == StatusEffectType.DeathMarkTarget;
 
     private static bool IsDoT(StatusEffectType t) =>
         t == StatusEffectType.Poison || t == StatusEffectType.Bleed || t == StatusEffectType.Burn;

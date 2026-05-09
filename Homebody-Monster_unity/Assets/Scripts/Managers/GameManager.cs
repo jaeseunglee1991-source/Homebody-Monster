@@ -68,26 +68,29 @@ public class GameManager : MonoBehaviour
         LoadingScreenManager.LoadSceneAsync(sceneName);
     }
 
-    public void ResetForNewMatch()
+    public async void ResetForNewMatch()
     {
         if (myCharacterData != null)
         {
             myCharacterData.currentHp = myCharacterData.maxHp;
         }
-        
+
         currentRoomId       = null;
         gameServerIp        = null;
         gameServerPort      = 0;
         lastMatchResult     = default;
         // M-10: 결과 저장 Task가 아직 진행 중이라면 null로 덮어쓰지 않는다.
-        // (덮어쓰면 ResultController.LoadAndDisplayRecord가 await할 핸들을 잃고
-        //  최신 전적이 누락될 수 있음.) 완료된 경우에만 안전하게 비운다.
         if (MatchResultSaveTask == null || MatchResultSaveTask.IsCompleted)
             MatchResultSaveTask = null;
-        // [버그 수정 연동] DisconnectAsync()로 Presence 해제 완료 후 NGO Shutdown 보장.
-        // 기존 Disconnect()는 fire-and-forget이라 유령 접속자가 남을 수 있었음.
+        // [버그 수정] Disconnect를 await로 완료 보장 후 LobbyScene 로드.
+        // fire-and-forget이면 LobbyScene 진입 후 SubscribeLobbyChat 재시도 시
+        // 이전 Presence/채널이 살아있어 재구독 실패 → 채팅 수신 불가.
         if (AppNetworkManager.Instance != null)
-            _ = AppNetworkManager.Instance.DisconnectAsync();
+        {
+            try { await AppNetworkManager.Instance.DisconnectAsync(); }
+            catch (System.Exception e)
+            { Debug.LogWarning($"[GameManager] Disconnect 오류 (무시): {e.Message}"); }
+        }
         LoadScene("LobbyScene");
     }
 }

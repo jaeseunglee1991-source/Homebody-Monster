@@ -123,7 +123,17 @@ public class ReconnectManager : MonoBehaviour
             if (netMgrPre != null && (netMgrPre.IsClient || netMgrPre.IsConnectedClient))
             {
                 netMgrPre.Shutdown();
-                yield return null; // NGO Shutdown 1프레임 대기
+                // NGO Shutdown은 OnClientDisconnectCallback 발화 + 내부 상태 정리를 포함한 비동기 작업.
+                // 1프레임(≈16ms)으로는 부족하여 후속 StartClient()가 false를 반환할 수 있음.
+                // IsListening이 false가 될 때까지(또는 안전 타임아웃) 대기.
+                float shutdownDeadline = Time.time + 2f;
+                while (Time.time < shutdownDeadline
+                       && Unity.Netcode.NetworkManager.Singleton != null
+                       && Unity.Netcode.NetworkManager.Singleton.IsListening)
+                {
+                    yield return null;
+                }
+                yield return new WaitForSeconds(0.1f);
             }
 
             // 재접속 시도
