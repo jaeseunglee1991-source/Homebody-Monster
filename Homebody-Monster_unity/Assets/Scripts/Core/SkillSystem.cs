@@ -696,9 +696,12 @@ public static class SkillSystem
                 t.networkSync.ApplyDamageServer(capturedBaseAtk * 1.5f, casterSync);
                 t.networkSync.ApplyStatusEffectServer(StatusEffectType.Slow, 2f, 0.6f, casterSync);
 
-                // 피격 시 시각 효과 전파 — casterSync가 살아있을 때만
-                if (casterSync != null && casterSync.IsSpawned)
-                    casterSync.NotifyTrapTriggeredClientRpc(trapPos);
+                // [BUG-13] 피격 시 시각 효과 전파 — casterSync Despawn 시 피격 대상의 sync로 폴백
+                var notifier = (casterSync != null && casterSync.IsSpawned)
+                    ? casterSync
+                    : t.networkSync;
+                if (notifier != null && notifier.IsSpawned)
+                    notifier.NotifyTrapTriggeredClientRpc(trapPos);
                 break; // 같은 폴링 틱에 다중 판정 방지 (0.2초 후 재판정)
             }
         }
@@ -709,8 +712,13 @@ public static class SkillSystem
         // casterSync가 Despawn됐을 경우 피격 대상(t)의 networkSync로 폴백.
         if (elapsed < maxDuration) // 조기 소진
         {
-            if (casterSync != null && casterSync.IsSpawned)
-                casterSync.RemoveTrapVisualClientRpc(trapPos);
+            // BUG-09: 시전자 Despawn 시에도 살아있는 임의의 PlayerNetworkSync를 통해
+            // RemoveTrapVisualClientRpc를 송신하여 클라이언트의 덫 시각 오브젝트가 잔류하지 않도록 함.
+            PlayerNetworkSync sender = (casterSync != null && casterSync.IsSpawned)
+                ? casterSync
+                : Object.FindAnyObjectByType<PlayerNetworkSync>();
+            if (sender != null && sender.IsSpawned)
+                sender.RemoveTrapVisualClientRpc(trapPos);
         }
         // 15초 만료는 클라이언트 측 Destroy(go, 15f)가 처리하므로 추가 RPC 불필요
     }

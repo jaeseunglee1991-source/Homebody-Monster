@@ -305,9 +305,9 @@ public class LobbySettingsPanel : MonoBehaviour
         confirmLogoutPanel?.SetActive(false);
         CloseSettingsImmediate();
 
-        // 매칭 탐색 중이면 취소 (LobbyUIController.OnClickCancelMatch와 동일 경로)
+        // [NEW-06] 매칭 탐색 중이면 취소 — DisconnectAsync 전에 RPC 완료를 보장
         if (MatchmakingManager.Instance != null && MatchmakingManager.Instance.IsSearching)
-            MatchmakingManager.Instance.CancelMatchmaking();
+            await MatchmakingManager.Instance.CancelMatchmakingAsync();
 
         // Supabase 세션 로그아웃
         if (SupabaseManager.Instance != null

@@ -127,12 +127,12 @@ public class StatusEffectSystem : MonoBehaviour
 
     private void TickEffects()
     {
-        // [C-12] elapsed 진행 및 DoT 틱은 서버 권한.
-        // 클라이언트 틱은 deltaTime 차이로 만료 시점이 어긋나 desync를 유발하므로
-        // 서버 또는 싱글 모드(netSync == null)에서만 진행.
+        // [BUG-05] elapsed 진행과 만료 처리는 서버·클라이언트 모두에서 수행해야 한다.
+        // 클라이언트가 만료를 처리하지 않으면 슬로우/스턴/스텔스 등의 시각/이동 잠금이
+        // 서버 만료 후에도 로컬에 잔존해 desync가 발생한다.
+        // DoT 데미지 연산만 서버 권한으로 격리.
         var netSync = owner.networkSync;
-        bool isAuthoritative = netSync == null || netSync.IsServer;
-        if (!isAuthoritative) return;
+        bool isServer = netSync == null || netSync.IsServer;
 
         for (int i = effects.Count - 1; i >= 0; i--)
         {
@@ -140,7 +140,7 @@ public class StatusEffectSystem : MonoBehaviour
             e.elapsed += Time.deltaTime;
 
             // DoT: 서버에서만 데미지 연산 (클라이언트는 팝업만 받음)
-            if (IsDoT(e.type))
+            if (isServer && IsDoT(e.type))
             {
                 e.dotTickTimer += Time.deltaTime;
                 while (e.dotTickTimer >= 1f)

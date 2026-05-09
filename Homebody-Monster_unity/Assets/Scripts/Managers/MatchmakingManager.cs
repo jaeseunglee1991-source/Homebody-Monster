@@ -49,6 +49,9 @@ public class MatchmakingManager : MonoBehaviour
 {
     public static MatchmakingManager Instance { get; private set; }
 
+    // BUG-04: 인게임 씬 이름 상수화 (이전 하드코딩 제거)
+    private const string InGameSceneName = "InGameScene";
+
     // ── Inspector ───────────────────────────────────────────────
     [Header("Matchmaking Settings")]
     public int   maxPlayers     = 8;
@@ -156,6 +159,18 @@ public class MatchmakingManager : MonoBehaviour
     public void CancelMatchmaking()
     {
         CancelSearch();
+    }
+
+    /// <summary>
+    /// [NEW-06] awaitable 매칭 취소. 로그아웃 흐름에서 DisconnectAsync 직전에 await하여
+    /// leave_matchmaking_queue RPC가 채널 해제 전에 완료되도록 보장한다.
+    /// </summary>
+    public async Task CancelMatchmakingAsync()
+    {
+        if (!isSearching || isDedicatedServerMode) return;
+        await CancelSearchAsync();
+        NotifyStatus("매칭이 취소되었습니다.");
+        FireMatchFailed("사용자 취소");
     }
 
     public async void StartSearch()
@@ -387,7 +402,7 @@ public class MatchmakingManager : MonoBehaviour
             // (MatchmakingManager는 DontDestroyOnLoad 싱글톤이라 인게임 중에도 살아있음.)
             string activeScene = UnityEngine.SceneManagement
                 .SceneManager.GetActiveScene().name;
-            if (activeScene == "InGameScene" || activeScene == GameManager.SceneResult)
+            if (activeScene == InGameSceneName || activeScene == GameManager.SceneResult)
                 continue;
 
             try
@@ -497,9 +512,12 @@ public class MatchmakingManager : MonoBehaviour
                 // [Fix] 이미 InGameScene이면 씬 중복 로드 생략.
                 string currentScene = UnityEngine.SceneManagement
                     .SceneManager.GetActiveScene().name;
-                if (currentScene == "InGameScene")
+                if (currentScene == InGameSceneName)
                 {
                     Debug.LogWarning("[Server] 이미 InGameScene → 씬 로드 생략");
+                    // BUG-01: 조기 return 시 PendingExpectedPlayerCount를 0으로 초기화하여
+                    // 다음 매치에서 이전 값이 잔류하지 않도록 함.
+                    NetworkSpawnManager.PendingExpectedPlayerCount = 0;
                     return;
                 }
 
@@ -508,7 +526,7 @@ public class MatchmakingManager : MonoBehaviour
 
                 Debug.Log("[Server] 🎬 인게임 씬 로드 시작...");
                 netMgr.SceneManager.LoadScene(
-                    "InGameScene", UnityEngine.SceneManagement.LoadSceneMode.Single);
+                    InGameSceneName, UnityEngine.SceneManagement.LoadSceneMode.Single);
             }
             else
             {

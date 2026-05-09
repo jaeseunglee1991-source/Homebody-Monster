@@ -390,7 +390,12 @@ public class NetworkRoomManager : MonoBehaviour
         {
             _memberChannel = SupabaseManager.Instance.Client.Realtime
                 .Channel($"private_room_members:{roomId}");
-            _memberChannel.Register(new PostgresChangesOptions("public", "private_room_members"));
+            // BUG-05: room_id 필터 추가 — 다른 방 멤버 이벤트 수신 차단.
+            // 전제: private_room_members 테이블이 REPLICA IDENTITY FULL 이어야 UPDATE/DELETE에도 동작.
+            _memberChannel.Register(new PostgresChangesOptions(
+                "public",
+                "private_room_members",
+                filter: $"room_id=eq.{roomId}"));
             _memberChannel.AddPostgresChangeHandler(ListenType.Inserts,
                 (_, _) => MainThreadDispatcher.Enqueue(() => _ = RefreshMembersAsync()));
             _memberChannel.AddPostgresChangeHandler(ListenType.Updates,
@@ -501,8 +506,16 @@ public class NetworkRoomManager : MonoBehaviour
                 GameManager.Instance.myCharacterData = StatCalculator.GenerateRandomCharacter(nick);
         }
 
+        bool ok = AppNetworkManager.Instance?.ConnectToGameServer(ip, port) ?? false;
+        if (!ok)
+        {
+            // BUG-02: 접속 실패 시 _isConnecting 복구하여 방 재사용 가능하게 함
+            _isConnecting = false;
+            ShowStatus("게임 서버 접속 실패. 다시 시도해주세요.");
+            Debug.LogError($"[Room] 게임 서버 접속 실패: {ip}:{port}");
+            return;
+        }
         roomPanel?.SetActive(false);
-        AppNetworkManager.Instance?.ConnectToGameServer(ip, port);
         Debug.Log($"[Room] 게임 서버 접속: {ip}:{port}");
     }
 

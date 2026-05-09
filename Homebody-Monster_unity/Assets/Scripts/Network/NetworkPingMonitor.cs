@@ -73,6 +73,8 @@ public class NetworkPingMonitor : NetworkBehaviour
     private CancellationTokenSource _pingCts;
     private CancellationTokenSource _saveCts;
     private Task                    _saveTask; // 저장 Task 참조 보관 — GC 조기 수집 방지
+    // BUG-10: OnNetworkDespawn 이중 호출 시에도 중복 저장이 발생하지 않도록 한 번 시작했으면 락.
+    private bool _saveStarted = false;
 
     // ════════════════════════════════════════════════════════════
     //  NGO 생명주기
@@ -127,8 +129,9 @@ public class NetworkPingMonitor : NetworkBehaviour
         // OnDestroy에서는 _saveCts를 취소하지 않음 — Supabase 왕복 완료 전 취소 방지.
         // [C-8] 진행 중인 저장 Task가 있으면 새로 시작하지 않음 (중복 저장 방지)
         // [Fix-16 보존] Owner(로컬 클라이언트)만 저장 — 서버 프로세스의 비-Owner 인스턴스 중복 저장 방지
-        if (IsOwner && (_saveTask == null || _saveTask.IsCompleted))
+        if (IsOwner && !_saveStarted && (_saveTask == null || _saveTask.IsCompleted))
         {
+            _saveStarted = true; // BUG-10: 이중 호출 방지
             _saveCts?.Cancel();
             _saveCts?.Dispose();
             _saveCts  = new CancellationTokenSource();
@@ -136,7 +139,7 @@ public class NetworkPingMonitor : NetworkBehaviour
         }
         else if (IsOwner)
         {
-            Debug.Log("[PingMonitor] 이전 저장 Task 진행 중 — 새 저장 스킵");
+            Debug.Log("[PingMonitor] 이전 저장 Task 진행 중 또는 이미 시작됨 — 새 저장 스킵");
         }
 
         if (Instance == this) Instance = null;
@@ -146,8 +149,13 @@ public class NetworkPingMonitor : NetworkBehaviour
 
     private void OnDestroy()
     {
-        _pingCts?.Cancel(); _pingCts?.Dispose();
-        _saveCts?.Cancel(); _saveCts?.Dispose();
+        _pingCts?.Cancel();
+        _pingCts?.Dispose();
+        _pingCts = null;
+
+        // [BUG-06] _saveCts는 여기서 취소하지 않음 — OnNetworkDespawn에서 시작한
+        // SaveSessionPingAsync가 Supabase 응답을 완료할 때까지 보장해야 함.
+        // 씬 전환 후 GC에 의해 자연 수거됨.
         if (Instance == this) Instance = null;
     }
 

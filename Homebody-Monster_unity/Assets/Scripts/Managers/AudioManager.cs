@@ -177,7 +177,10 @@ public class AudioManager : MonoBehaviour
     public void SetBgmVolume(float volume)
     {
         volume = Mathf.Clamp01(volume);
-        ActiveBGM().volume = volume;
+        // BUG-07: 활성 소스만 갱신하면 페이드 후 비활성 소스의 volume이 0으로 고정되어
+        // 다음 BGM 전환 시 무음이 됨. 두 소스 모두 갱신해야 안전.
+        if (_bgmA != null) _bgmA.volume = volume;
+        if (_bgmB != null) _bgmB.volume = volume;
     }
 
     public void SetSfxVolume(float volume)

@@ -112,6 +112,23 @@ public class AuthManager : MonoBehaviour
 
         try
         {
+            // [NEW-03] 저장된 세션 복원을 먼저 시도. SignInAnonymously는 매번 새 익명 계정을
+            // 생성하므로, 복원이 가능하면 기존 닉네임/전적/피자/부활권 데이터를 보존해야 한다.
+            try
+            {
+                var restored = await SupabaseManager.Instance.Client.Auth.RetrieveSessionAsync();
+                if (restored?.User != null)
+                {
+                    Debug.Log($"[Auth] 기존 익명 세션 복원 성공: {restored.User.Id}");
+                    await CheckUserFlow(restored.User.Id);
+                    return;
+                }
+            }
+            catch (System.Exception restoreEx)
+            {
+                Debug.Log($"[Auth] 세션 복원 실패 → 신규 게스트 계정 생성으로 진행: {restoreEx.Message}");
+            }
+
             var task = SupabaseManager.Instance.Client.Auth.SignInAnonymously();
             var session = await task;
 
@@ -323,7 +340,9 @@ public class AuthManager : MonoBehaviour
         {
             // preserveError: true — "이미 사용 중", "세션 만료", "저장 실패" 등
             // try 내부 ShowError + return 이후 finally가 에러 텍스트를 덮어쓰지 않도록 보존
-            SetBusy(false, preserveError: true);
+            // NEW-05: SubmitNickname 성공 시 LobbyScene 로드로 이 컴포넌트가 파괴되어
+            // SetBusy 내부의 컴포넌트 접근이 MissingReferenceException을 던질 수 있음.
+            if (this != null) SetBusy(false, preserveError: true);
         }
     }
 

@@ -301,7 +301,11 @@ public class InGameManager : MonoBehaviour
         if (alivePlayers.Count <= 1)
         {
             gameEnded = true;
-            PlayerController winner = alivePlayers.Count == 1 ? alivePlayers[0] : null;
+            // NEW-03: 동시 사망(alivePlayers.Count == 0) 시 winner=null로 인한 전원 탈락 방지.
+            // 최고 HP 플레이어를 1위로 결정 (씬 전체 폴백 포함).
+            PlayerController winner = alivePlayers.Count == 1
+                ? alivePlayers[0]
+                : GetHighestHpPlayer();
             StartCoroutine(FinishGame(winner));
         }
     }
@@ -321,10 +325,12 @@ public class InGameManager : MonoBehaviour
         float waitTime = 0f;
         while (isNetworkMode && alivePlayers.Count < minPlayers && waitTime < 15f)
         {
+            if (gameEnded) yield break; // NEW-05
             BroadcastOrShowMessage($"다른 생존자 접속 대기 중... ({alivePlayers.Count}/{maxPlayers})");
             yield return new WaitForSeconds(1f);
             waitTime += 1f;
         }
+        if (gameEnded) yield break; // NEW-05
 
         float extraWait = 0f;
         while (alivePlayers.Count < maxPlayers && extraWait < 3f)
@@ -539,10 +545,11 @@ public class InGameManager : MonoBehaviour
         // • 데디케이티드 서버: IsOwner 플레이어 없음 → 서버에서 계산 불가
         //   → ClientRpc로 각 Owner 클라이언트에게 전달, 수신 측에서 GameManager 저장 + Supabase 저장
         // • listen-server: 호스트도 ClientRpc 수신 → 동일 경로로 처리
+        // BUG-02: NetworkSpawnManager.Instance null 시 빈 배열 폴백 대신 씬 전체 탐색.
         var allSyncs = NetworkSpawnManager.Instance != null
             ? NetworkSpawnManager.Instance.GetAllPlayers()
             : (System.Collections.Generic.IReadOnlyCollection<PlayerNetworkSync>)
-              System.Array.Empty<PlayerNetworkSync>();
+              FindObjectsByType<PlayerNetworkSync>(FindObjectsSortMode.None);
         foreach (var sync in allSyncs)
         {
             if (sync == null) continue;
@@ -581,8 +588,8 @@ public class InGameManager : MonoBehaviour
         // NotifyMatchResultClientRpc 수신 측에서 _ = SaveMatchResultAsync()를 실행하지만
         // 서버가 즉시 LoadScene을 호출하면 PlayerNetworkSync(destroyWithScene:true)가
         // Destroy되면서 진행 중인 Task가 고아가 되어 DB 저장이 완료되지 않음.
-        // → Supabase 네트워크 왕복 충분히 대기 후 씬 전환 (2초 추가).
-        yield return new WaitForSeconds(2f);
+        // → Supabase 네트워크 왕복 충분히 대기 후 씬 전환 (3초로 증가, BUG-03).
+        yield return new WaitForSeconds(3f);
 
         // ── NGO SceneManager로 전체 씬 전환 ────────────────────────
         // [버그 수정 X-A] netMgr이 없거나 SceneManager.LoadScene이 실패하면
@@ -603,7 +610,15 @@ public class InGameManager : MonoBehaviour
         }
 
         if (!ngoLoaded)
+        {
+            // BUG-03: NGO 씬 로드 실패 시 클라이언트 고립 방지 — 각 클라이언트에 강제 씬 전환 RPC 송신.
+            foreach (var sync in FindObjectsByType<PlayerNetworkSync>(FindObjectsSortMode.None))
+            {
+                if (sync != null && sync.IsSpawned)
+                    sync.ForceLoadResultSceneClientRpc();
+            }
             GameManager.Instance?.LoadScene(GameManager.SceneResult);
+        }
     }
 
     private PlayerController GetHighestHpPlayer()
@@ -612,9 +627,13 @@ public class InGameManager : MonoBehaviour
         // myData.currentHp는 클라이언트 로컬 캐시이며, _serverData와 별개 객체일 수 있음.
         // NetworkHp.Value는 서버가 직접 갱신하는 단일 진실 공급원으로 더 정확함.
         PlayerController best = null; float maxHp = -1f;
-        foreach (var p in alivePlayers)
+        // NEW-03: alivePlayers가 비어있으면 씬 전체에서 탐색해 동시 사망 케이스 대응.
+        IEnumerable<PlayerController> source = alivePlayers.Count > 0
+            ? (IEnumerable<PlayerController>)alivePlayers
+            : FindObjectsByType<PlayerController>(FindObjectsSortMode.None);
+        foreach (var p in source)
         {
-            if (p.networkSync == null) continue;
+            if (p == null || p.networkSync == null) continue;
             float hp = p.networkSync.NetworkHp.Value;
             if (hp > maxHp) { maxHp = hp; best = p; }
         }

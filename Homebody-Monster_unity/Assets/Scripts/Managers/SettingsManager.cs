@@ -75,8 +75,8 @@ public class SettingsManager : MonoBehaviour
         int targetH = Mathf.RoundToInt(targetW * screenAspect);
 
 #if UNITY_ANDROID
-        // 안드로이드는 항상 풀스크린 → bool 오버로드 사용
-        Screen.SetResolution(targetW, targetH, true);
+        // BUG-14: bool 오버로드는 Unity 2022+ 에서 deprecated. FullScreenMode 열거형 사용.
+        Screen.SetResolution(targetW, targetH, FullScreenMode.FullScreenWindow);
 #else
         // 데스크톱/에디터: FullScreenMode 명시
         Screen.SetResolution(targetW, targetH, FullScreenMode.FullScreenWindow);

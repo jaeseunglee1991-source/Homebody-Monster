@@ -46,6 +46,8 @@ public class NetworkSpawnManager : NetworkBehaviour
 
     // ── 서버 전용 상태 ─────────────────────────────────────────
     private readonly Dictionary<ulong, PlayerNetworkSync> _players = new();
+    // [NEW-01] FinishGame이 사망/이탈자에게도 결과 RPC를 보낼 수 있도록 전체 스폰 추적.
+    private readonly Dictionary<ulong, PlayerNetworkSync> _allSpawnedPlayers = new();
     private readonly List<int> _shuffledSpawnIndices = new();
     private bool  _gameStarted = false;
 
@@ -72,11 +74,13 @@ public class NetworkSpawnManager : NetworkBehaviour
         if (!IsServer) return;
 
         // [Fix] 매칭 성사 인원으로 expectedPlayerCount 덮어쓰기.
+        bool pendingApplied = false;
         if (PendingExpectedPlayerCount > 0)
         {
             Debug.Log($"[NetworkSpawnManager] expectedPlayerCount {expectedPlayerCount} → {PendingExpectedPlayerCount} (매칭 성사 인원)");
             expectedPlayerCount = PendingExpectedPlayerCount;
             PendingExpectedPlayerCount = 0; // 다음 매치를 위해 초기화
+            pendingApplied = true;
         }
 
         NetworkManager.Singleton.OnClientConnectedCallback  += HandleClientConnected;
@@ -92,8 +96,9 @@ public class NetworkSpawnManager : NetworkBehaviour
         //         IsOwner=true인 PingRoutine이 서버에서만 동작 → 클라이언트 RTT 미수집.
         //   수정: 클라이언트별로 SpawnPlayer()에서 SpawnWithOwnership(clientId) 한다.
 
-        // H-11: MatchmakingManager가 살아있다면 매치 maxPlayers로 동기화
-        if (MatchmakingManager.Instance != null && MatchmakingManager.Instance.maxPlayers > 0)
+        // H-11/NEW-02: PendingExpectedPlayerCount(실제 매칭 인원)이 적용된 경우엔 덮어쓰지 않음.
+        // 폴백 경로(매칭 우회 등)에서만 maxPlayers로 동기화.
+        if (!pendingApplied && MatchmakingManager.Instance != null && MatchmakingManager.Instance.maxPlayers > 0)
             expectedPlayerCount = MatchmakingManager.Instance.maxPlayers;
 
         Debug.Log($"[NetworkSpawnManager] ☁️ 서버 준비. {expectedPlayerCount}명 대기 시작.");
@@ -200,6 +205,7 @@ public class NetworkSpawnManager : NetworkBehaviour
         if (sync != null)
         {
             _players[clientId] = sync;
+            _allSpawnedPlayers[clientId] = sync;
         }
         else
         {
@@ -318,5 +324,5 @@ public class NetworkSpawnManager : NetworkBehaviour
     }
 
     public IReadOnlyCollection<PlayerNetworkSync> GetAllPlayers()
-        => _players.Values.ToList();
+        => _allSpawnedPlayers.Values.Where(s => s != null).ToList();
 }

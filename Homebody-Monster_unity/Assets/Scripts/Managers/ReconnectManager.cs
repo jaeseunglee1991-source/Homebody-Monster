@@ -95,6 +95,9 @@ public class ReconnectManager : MonoBehaviour
         if (_isReconnecting) return;
         if (string.IsNullOrEmpty(_lastIp)) return;
 
+        // [BUG-07] 게임이 정상 종료(isGameActive=false)된 경우 불필요한 재접속 시도 생략
+        if (InGameManager.Instance != null && !InGameManager.Instance.isGameActive) return;
+
         Debug.Log($"[ReconnectManager] 연결 끊김({reason}). 재접속 시도 시작.");
         _reconnectCoroutine = StartCoroutine(ReconnectRoutine());
     }
@@ -126,7 +129,8 @@ public class ReconnectManager : MonoBehaviour
                 // NGO Shutdown은 OnClientDisconnectCallback 발화 + 내부 상태 정리를 포함한 비동기 작업.
                 // 1프레임(≈16ms)으로는 부족하여 후속 StartClient()가 false를 반환할 수 있음.
                 // IsListening이 false가 될 때까지(또는 안전 타임아웃) 대기.
-                float shutdownDeadline = Time.time + 2f;
+                // NEW-08: 재시도당 최대 2초 대기는 누적 30초 UX 저하. 1초로 단축.
+                float shutdownDeadline = Time.time + 1f;
                 while (Time.time < shutdownDeadline
                        && Unity.Netcode.NetworkManager.Singleton != null
                        && Unity.Netcode.NetworkManager.Singleton.IsListening)
@@ -138,7 +142,11 @@ public class ReconnectManager : MonoBehaviour
 
             // 재접속 시도
             if (AppNetworkManager.Instance != null)
+            {
+                // [NEW-04] Shutdown으로 사라진 NGO 콜백을 재구독한 뒤 StartClient 호출
+                AppNetworkManager.Instance.ResubscribeNetworkCallbacks();
                 AppNetworkManager.Instance.ConnectToGameServer(_lastIp, _lastPort);
+            }
 
             // retryInterval 동안 접속 성공 여부 체크
             float waited = 0f;

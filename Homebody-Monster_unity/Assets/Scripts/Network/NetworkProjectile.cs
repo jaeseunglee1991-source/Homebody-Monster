@@ -100,6 +100,12 @@ public class NetworkProjectile : NetworkBehaviour
                 SpawnHitEffectClientRpc(transform.position);
             DespawnProjectile();
         }
+        // 4. [BUG-08] PlayerNetworkSync도 Obstacle 레이어도 아닌 물리 콜라이더(맵 경계, 장식물 등)에
+        //    부딪힌 경우에도 즉시 소멸 — 트리거가 아닌 실제 충돌체만 대상.
+        else if (targetSync == null && !other.isTrigger)
+        {
+            DespawnProjectile();
+        }
     }
 
     private void ApplyDamageAndStatus(PlayerNetworkSync targetSync)

@@ -243,6 +243,8 @@ public class DailyRewardSystem : MonoBehaviour
         if (claimButton != null) claimButton.interactable = false;
         SetStatus("서버에 요청 중...");
 
+        // [NEW-07] 예외/실패 경로에서 버튼을 다시 활성화해야 하는지 추적
+        bool shouldRestoreButton = false;
         try
         {
             var result = await SupabaseManager.Instance.ClaimDailyReward();
@@ -253,7 +255,7 @@ public class DailyRewardSystem : MonoBehaviour
             if (result == null)
             {
                 SetStatus("⚠ 서버 오류. 잠시 후 다시 시도해주세요.");
-                if (claimButton != null) claimButton.interactable = true;
+                shouldRestoreButton = true;
                 return;
             }
 
@@ -284,10 +286,22 @@ public class DailyRewardSystem : MonoBehaviour
 
             Debug.Log($"[DailyReward] ✅ 수령 완료 — streak={result.Streak}, pizza={result.RewardPizza}");
         }
+        catch (System.Exception e)
+        {
+            // [NEW-07] 예외 발생 시 버튼 비활성 영구화 방지
+            Debug.LogError($"[DailyReward] 수령 처리 중 예외: {e.Message}");
+            SetStatus("⚠ 오류가 발생했습니다. 다시 시도해주세요.");
+            shouldRestoreButton = true;
+        }
         finally
         {
             // H-1: ensure flag is always restored
-            if (this != null) _isClaiming = false;
+            if (this != null)
+            {
+                _isClaiming = false;
+                if (shouldRestoreButton && claimButton != null)
+                    claimButton.interactable = true;
+            }
         }
     }
 
@@ -308,8 +322,9 @@ public class DailyRewardSystem : MonoBehaviour
     {
         if (daySlots == null) return;
 
-        // streak 범위 방어: 0 이하·8 이상 모두 Clamp 처리
-        int todayIndex = Mathf.Clamp(streak - 1, 0, 6);
+        // [BUG-11] streak를 7일 주기로 정규화 (1~7) — streak>=8 시 모든 슬롯이 완료로 고정되는 버그 방지
+        int normalizedStreak = streak > 0 ? ((streak - 1) % 7) + 1 : 1;
+        int todayIndex = Mathf.Clamp(normalizedStreak - 1, 0, 6);
 
         for (int i = 0; i < daySlots.Length && i < 7; i++)
         {

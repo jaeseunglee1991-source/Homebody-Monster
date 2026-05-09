@@ -249,22 +249,30 @@ public class PlayerNetworkSync : NetworkBehaviour
 
     private void HandleKillCountChanged(int prev, int curr) { _controller.SetKillCount(curr); }
 
+    // BUG-11: TMP 텍스트 캐시 — 매번 GetComponentsInChildren을 호출하지 않도록 1회만 탐색.
+    private TMPro.TextMeshPro _nicknameTextCache;
+
     private void HandleNicknameChanged(FixedString64Bytes prev, FixedString64Bytes curr)
     {
         if (_controller == null) return;
         string nickname = curr.ToString();
         if (_controller.myData != null)
             _controller.myData.playerName = nickname;
-        // 캐릭터 프리팹 하위의 "NicknameText" TMP 오브젝트를 자동 탐색하여 갱신
-        var tmpTexts = _controller.GetComponentsInChildren<TMPro.TextMeshPro>(true);
-        foreach (var t in tmpTexts)
+
+        if (_nicknameTextCache == null)
         {
-            if (t.gameObject.name == "NicknameText")
+            // 1회 탐색 후 캐싱
+            foreach (var t in _controller.GetComponentsInChildren<TMPro.TextMeshPro>(true))
             {
-                t.text = nickname;
-                break;
+                if (t.gameObject.name == "NicknameText")
+                {
+                    _nicknameTextCache = t;
+                    break;
+                }
             }
         }
+        if (_nicknameTextCache != null)
+            _nicknameTextCache.text = nickname;
     }
 
     // ════════════════════════════════════════════════════════════
@@ -299,8 +307,22 @@ public class PlayerNetworkSync : NetworkBehaviour
         // 같은 객체를 참조하도록 단일화 → IronSkin 실드, deathMark, tenacity 등 런타임 필드 일관성 보장
         _controller.SetMyData(_serverData);
         NetworkNickname.Value  = nickname;
-        NetworkHp.Value        = _serverData.maxHp;
-        NetworkMaxHp.Value     = _serverData.maxHp;
+        // NEW-02: 리롤 재제출 시 전투 중인 플레이어의 HP가 만피로 강제 리셋되는 버그 수정.
+        // 최초 스폰(NetworkHp가 기본 100f) 또는 게임 시작 전에는 만피 초기화,
+        // 게임 진행 중 리롤은 기존 HP 비율을 유지하면서 MaxHp만 갱신.
+        bool isFirstSpawn = Mathf.Approximately(NetworkHp.Value, 100f);
+        bool gameActive   = InGameManager.Instance != null && InGameManager.Instance.isGameActive;
+        if (isFirstSpawn || !gameActive)
+        {
+            NetworkHp.Value    = _serverData.maxHp;
+            NetworkMaxHp.Value = _serverData.maxHp;
+        }
+        else
+        {
+            float hpRatio = NetworkMaxHp.Value > 0f ? NetworkHp.Value / NetworkMaxHp.Value : 1f;
+            NetworkMaxHp.Value = _serverData.maxHp;
+            NetworkHp.Value    = Mathf.Round(_serverData.maxHp * hpRatio * 10f) / 10f;
+        }
         // [외형 동기화] 검증된 직업을 모든 클라이언트에 브로드캐스트.
         // PlayerController.OnJobValueChanged 가 수신하여 UpdateVisualByJob 호출.
         NetworkJob.Value       = (int)_serverData.job;
@@ -535,14 +557,22 @@ public class PlayerNetworkSync : NetworkBehaviour
         // _pendingKiller = null이므로 killer = target 자신.
         // 결과: 자기 자신의 킬 카운트가 1 증가함.
         // 수정: killer가 target 자신과 다를 때만 킬 카운트를 올림.
+        // BUG-04: 자해(Thorns 반사 등) 사망 시 killer==target인 채로 BroadcastKillFeed가
+        // 호출되어 킬피드에 동일 닉네임 "X가 X를 처치"로 표시되는 문제.
+        // 정상 킬은 기존대로, 자해 사망은 "[자멸]" 표기로 분리 송출.
+        string victimName = target.NetworkNickname.Value.ToString();
         if (killer != target)
+        {
             killer.NetworkKillCount.Value++;
+            string killerName = killer.NetworkNickname.Value.ToString();
+            BroadcastKillFeedClientRpc(killerName, victimName);
+        }
+        else
+        {
+            BroadcastKillFeedClientRpc("[자멸]", victimName);
+        }
 
         target._pendingKiller = null;
-
-        string killerName = killer.NetworkNickname.Value.ToString();
-        string victimName = target.NetworkNickname.Value.ToString();
-        BroadcastKillFeedClientRpc(killerName, victimName);
 
         InGameManager.Instance?.OnPlayerDied(target._controller);
     }
@@ -780,6 +810,18 @@ public class PlayerNetworkSync : NetworkBehaviour
     }
 
     /// <summary>
+    /// BUG-03: NGO SceneManager.LoadScene 폴백 경로용. 서버가 NGO 씬 전환에 실패했을 때
+    /// 각 클라이언트가 로컬 씬 전환을 수행하도록 강제한다.
+    /// </summary>
+    [ClientRpc]
+    public void ForceLoadResultSceneClientRpc(ClientRpcParams rpcParams = default)
+    {
+        if (!IsOwner) return;
+        Debug.LogWarning("[PlayerNetworkSync] NGO 씬 전환 폴백 — 로컬에서 ResultScene 로드.");
+        GameManager.Instance?.LoadScene(GameManager.SceneResult);
+    }
+
+    /// <summary>
     /// 서버 → 각 Owner 클라이언트: 본인의 매치 결과를 전달합니다.
     /// InGameManager.FinishGame()에서 개별 OwnerClientId를 대상으로 호출됩니다.
     ///
@@ -932,7 +974,8 @@ public class PlayerNetworkSync : NetworkBehaviour
         _controller.StatusFX?.RemoveEffect(StatusEffectType.DeathMarkTarget);
 
         // 모든 클라이언트에 낙인 해제 동기화 (클라이언트 StatusFX 상태 일치)
-        SyncStatusEffectClientRpc((int)StatusEffectType.DeathMarkTarget, 0f, 0f, ulong.MaxValue);
+        // [NEW-10] forceRemove 파라미터로 강제 해제 신호를 명시 (이전엔 duration=0 ambiguity)
+        SyncStatusEffectClientRpc((int)StatusEffectType.DeathMarkTarget, 0f, 0f, ulong.MaxValue, true);
     }
 
     public void ApplyStatusEffectServer(StatusEffectType type, float duration, float value = 0f, PlayerNetworkSync source = null)
@@ -955,16 +998,17 @@ public class PlayerNetworkSync : NetworkBehaviour
     }
 
     [ClientRpc]
-    private void SyncStatusEffectClientRpc(int type, float duration, float value, ulong sourceNetObjId)
+    private void SyncStatusEffectClientRpc(int type, float duration, float value, ulong sourceNetObjId, bool forceRemove = false)
     {
         if (IsServer) return;
 
-        // duration = 0 은 ForceRemoveDeathMarkServer 등 강제 해제 신호
-        if (duration <= 0f)
+        // [NEW-10] 강제 해제는 forceRemove 파라미터로 판단 (duration=0 ambiguity 해소)
+        if (forceRemove)
         {
             _controller.StatusFX.RemoveEffect((StatusEffectType)type);
             return;
         }
+        if (duration <= 0f) return;
 
         PlayerController sourceCtrl = null;
         if (sourceNetObjId != ulong.MaxValue &&

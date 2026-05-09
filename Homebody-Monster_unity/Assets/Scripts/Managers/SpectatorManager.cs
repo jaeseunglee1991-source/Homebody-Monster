@@ -89,7 +89,9 @@ public class SpectatorManager : MonoBehaviour
         _isSpectating = false;
         if (_refreshCoroutine != null) { StopCoroutine(_refreshCoroutine); _refreshCoroutine = null; }
         spectatorUI?.SetActive(false);
-        InGameHUD.Instance?.SetControlsVisible(true);
+        // [BUG-09] 사망한 로컬 플레이어의 조작 UI는 다시 표시하지 않음.
+        // 씬 전환 시 자연 정리되며, attackLocked이 true라 조작 UI를 보여줘도 입력은 무시되지만
+        // UX 혼란을 막기 위해 비활성 상태 유지.
     }
 
     // ════════════════════════════════════════════════════════════

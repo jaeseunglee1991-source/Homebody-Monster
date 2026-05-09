@@ -141,25 +141,33 @@ public partial class SupabaseManager : MonoBehaviour
         try
         {
             Debug.Log($"[Supabase] Querying profiles table for ID: {userId}");
-            var profile = await Client
+            // NEW-07: Single()은 0건/2건 이상 모두 예외를 던져 신규 유저 트리거 지연 시 불안정.
+            // Limit(1).Get() + FirstOrDefault()로 0건도 null 반환되어 안전. 재시도 간격도 800ms로 확장.
+            var response = await Client
                 .From<UserProfile>()
                 .Filter("id", Supabase.Postgrest.Constants.Operator.Equals, userId)
-                .Single();
+                .Limit(1)
+                .Get();
 
-            return profile;
+            return response?.Models != null && response.Models.Count > 0
+                ? response.Models[0]
+                : null;
         }
         catch (System.Exception e)
         {
             Debug.LogWarning($"[Supabase] Profile query error: {e.Message}. Attempting retry...");
-            await Task.Delay(500);
+            await Task.Delay(800);
             try
             {
-                var profile = await Client
+                var response = await Client
                     .From<UserProfile>()
                     .Filter("id", Supabase.Postgrest.Constants.Operator.Equals, userId)
-                    .Single();
+                    .Limit(1)
+                    .Get();
 
-                return profile;
+                return response?.Models != null && response.Models.Count > 0
+                    ? response.Models[0]
+                    : null;
             }
             catch (System.Exception ex)
             {
@@ -489,8 +497,15 @@ public partial class SupabaseManager : MonoBehaviour
 
         if (_isLobbyChannelSubscribed && _lobbyChatChannel != null)
         {
-            Debug.Log("[Supabase] 로비 채팅 이미 구독 중");
-            return;
+            // BUG-15: 플래그가 true여도 실제 채널 상태가 Joined가 아니면(Realtime 재연결 직후)
+            // 재구독을 진행해야 채팅 수신이 복구됨.
+            if (_lobbyChatChannel.State == Supabase.Realtime.Constants.ChannelState.Joined)
+            {
+                Debug.Log("[Supabase] 로비 채팅 이미 구독 중");
+                return;
+            }
+            Debug.LogWarning($"[Supabase] 채널 상태 불일치({_lobbyChatChannel.State}) — 재구독 진행");
+            _isLobbyChannelSubscribed = false;
         }
 
         try
@@ -531,6 +546,14 @@ public partial class SupabaseManager : MonoBehaviour
             await _lobbyChatChannel.Subscribe();
             _isLobbyChannelSubscribed = true;
             Debug.Log("[Supabase] ✅ 로비 채팅 채널 구독 완료");
+
+            // BUG-06: 구독 전에 TrackLobbyPresence가 호출되어 보류된 닉네임이 있다면 자동 등록.
+            if (!string.IsNullOrEmpty(_pendingPresenceNickname))
+            {
+                string pending = _pendingPresenceNickname;
+                _pendingPresenceNickname = null;
+                TrackLobbyPresence(pending);
+            }
         }
         catch (System.Exception e)
         {
@@ -605,6 +628,17 @@ public partial class SupabaseManager : MonoBehaviour
         if (message.Length > MaxChatMessageLength)
             message = message.Substring(0, MaxChatMessageLength);
 
+        // [BUG-12] 금칙어 필터링 — 닉네임에만 적용되던 ForbiddenWords를 채팅 메시지에도 적용
+        string lowerMsg = message.ToLower();
+        foreach (string bad in ForbiddenWords.List)
+        {
+            if (!string.IsNullOrEmpty(bad) && lowerMsg.Contains(bad.ToLower()))
+            {
+                Debug.Log("[Supabase] 금칙어 포함 채팅 차단");
+                return false;
+            }
+        }
+
         // [Fix] 쿨다운 타임스탬프를 await 이전에 갱신 (낙관적 잠금).
         //
         // 이전 버그:
@@ -640,8 +674,14 @@ public partial class SupabaseManager : MonoBehaviour
             {
                 if (t.IsFaulted)
                 {
-                    _lastChatSendTime = -999f;
-                    Debug.LogError($"[Supabase] 채팅 비동기 전송 실패: {t.Exception?.GetBaseException().Message}");
+                    // NEW-01: ContinueWith는 스레드풀에서 실행됨. Unity float 필드 쓰기는
+                    // 메인스레드에서 수행해야 안전하므로 MainThreadDispatcher로 마샬링.
+                    var ex = t.Exception?.GetBaseException();
+                    MainThreadDispatcher.Enqueue(() =>
+                    {
+                        _lastChatSendTime = -999f;
+                        Debug.LogError($"[Supabase] 채팅 비동기 전송 실패: {ex?.Message}");
+                    });
                 }
             }, TaskScheduler.Default);
 
@@ -688,13 +728,20 @@ public partial class SupabaseManager : MonoBehaviour
     /// <summary>
     /// 로비 Presence를 Track합니다. SubscribeLobbyChat() 완료 후, 닉네임 로드 후 호출하세요.
     /// </summary>
+    // BUG-06: 채널 구독 전에 TrackLobbyPresence가 호출되면 닉네임을 임시 저장했다가
+    // SubscribeLobbyChat 완료 직후 자동 등록한다.
+    private string _pendingPresenceNickname = null;
+
     public void TrackLobbyPresence(string nickname)
     {
         if (_lobbyPresence == null || !_isLobbyChannelSubscribed)
         {
-            Debug.LogWarning("[Supabase] Presence Track 실패 — 채널 미구독");
+            _pendingPresenceNickname = nickname;
+            Debug.LogWarning("[Supabase] Presence Track 실패 — 채널 미구독. 구독 완료 후 자동 등록 예정.");
             return;
         }
+
+        _pendingPresenceNickname = null;
 
         try
         {

@@ -44,6 +44,19 @@ public class AppNetworkManager : MonoBehaviour
         NetworkManager.Singleton.OnClientDisconnectCallback  -= HandleClientDisconnected;
     }
 
+    /// <summary>
+    /// [NEW-04] NetworkManager.Shutdown() 후 내부 콜백 목록이 초기화되어
+    /// OnEnable에서 한 번 구독한 콜백이 사라진다. 재접속 직전에 명시적으로 재구독.
+    /// </summary>
+    public void ResubscribeNetworkCallbacks()
+    {
+        if (NetworkManager.Singleton == null) return;
+        NetworkManager.Singleton.OnClientConnectedCallback  -= HandleClientConnected;
+        NetworkManager.Singleton.OnClientDisconnectCallback -= HandleClientDisconnected;
+        NetworkManager.Singleton.OnClientConnectedCallback  += HandleClientConnected;
+        NetworkManager.Singleton.OnClientDisconnectCallback += HandleClientDisconnected;
+    }
+
     // ════════════════════════════════════════════════════════════
     //  서버 모드
     // ════════════════════════════════════════════════════════════
@@ -272,11 +285,11 @@ public class AppNetworkManager : MonoBehaviour
 
         if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer)
         {
-            // ── 서버: 이탈한 클라이언트의 PlayerController를 찾아 InGameManager에 알림 ──
+            // ── 서버: 이탈한 클라이언트는 NetworkSpawnManager.HandleClientDisconnected가
+            //   사망 처리(OnPlayerDied) + alivePlayers 정리를 담당하므로
+            //   여기서 OnPlayerDisconnected를 호출하면 이중 처리 + CheckWinCondition 2회 실행 발생.
+            //   → 로그만 남기고 위임. (BUG-01)
             Debug.LogWarning($"[AppNetworkManager] ⚠️ 클라이언트 이탈 감지 (clientId: {clientId})");
-            PlayerController disconnected = FindPlayerByClientId(clientId);
-            if (disconnected != null)
-                InGameManager.Instance?.OnPlayerDisconnected(disconnected);
         }
         else
         {

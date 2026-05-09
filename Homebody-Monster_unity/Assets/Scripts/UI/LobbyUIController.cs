@@ -147,6 +147,26 @@ public class LobbyUIController : MonoBehaviour
 
         // H-6: 마지막 로그인 시각 갱신
         _ = SupabaseManager.Instance?.UpdateLastLogin();
+
+        // [BUG-10] 채팅 버튼이 10초 내 활성화되지 않으면 사용자에게 안내
+        StartCoroutine(ChatButtonTimeoutRoutine());
+    }
+
+    private System.Collections.IEnumerator ChatButtonTimeoutRoutine()
+    {
+        yield return new WaitForSeconds(10f);
+        if (this == null || sendChatButton == null) yield break;
+        if (sendChatButton.interactable) yield break;
+
+        if (_isNicknameLoaded && !_isChatReady)
+        {
+            Debug.LogWarning("[LobbyUI] 채팅 채널 연결 타임아웃 — 재연결 시도");
+            AppNetworkManager.Instance?.ConnectToLobby();
+        }
+        else if (!_isNicknameLoaded)
+        {
+            UpdateChatUI("[시스템]: 프로필 로드에 실패했습니다. 앱을 재시작해주세요.");
+        }
     }
 
     /// <summary>
@@ -523,7 +543,9 @@ public class LobbyUIController : MonoBehaviour
         if (matchmakingPanel != null) matchmakingPanel.SetActive(false); // 팝업 숨기기
 
         if (startMatchButton  != null) startMatchButton.interactable = true;
-        // cancelMatchButton은 ShowMatchmakingPanel에서만 활성화
+        // NEW-06: 매칭 실패/취소 후 ShowLobbyPanel 재진입 시 cancelMatchButton이
+        // 활성 상태로 잔류하지 않도록 명시적으로 비활성화.
+        if (cancelMatchButton != null) cancelMatchButton.interactable = false;
 
         // UI 텍스트/슬라이더 초기화
         if (timerText      != null) timerText.text = $"{(int)maxWaitSeconds:00}초";

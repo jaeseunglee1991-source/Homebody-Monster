@@ -5,6 +5,40 @@ using System.Linq;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 
+/*
+=== Supabase SQL — spend_pizza_for_reroll (BUG-14) ===
+
+CREATE OR REPLACE FUNCTION public.spend_pizza_for_reroll()
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_cost    INT := 20;
+  v_current INT;
+BEGIN
+  SELECT pizza_count INTO v_current
+  FROM public.profiles
+  WHERE id = auth.uid();
+
+  IF v_current IS NULL OR v_current < v_cost THEN
+    RETURN false;
+  END IF;
+
+  UPDATE public.profiles
+  SET pizza_count = pizza_count - v_cost
+  WHERE id = auth.uid();
+
+  RETURN true;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.spend_pizza_for_reroll() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.spend_pizza_for_reroll() TO authenticated;
+
+=== SQL 끝 ===
+*/
+
 // ════════════════════════════════════════════════════════════════
 //  ORM 모델 — match_history, leaderboard_kills view, ban_logs
 //

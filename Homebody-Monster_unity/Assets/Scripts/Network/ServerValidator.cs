@@ -113,7 +113,12 @@ public class ServerValidator : MonoBehaviour
 
                 if (rec.violationCount >= _kickThreshold)
                 {
-                    _ = BanAndKickAsync(clientId, sync, type);
+                    // BUG-12: 예외 무시 → ContinueWith로 실패 시 로그 출력
+                    BanAndKickAsync(clientId, sync, type).ContinueWith(t =>
+                    {
+                        if (t.IsFaulted)
+                            Debug.LogError($"[ServerValidator] BanAndKick 예외: {t.Exception?.GetBaseException().Message}");
+                    }, System.Threading.Tasks.TaskScheduler.Default);
                     return;
                 }
                 return; // 위반 시 lastPosition/lastTime 갱신하지 않음
@@ -140,7 +145,14 @@ public class ServerValidator : MonoBehaviour
                 rec.violationCount++;
                 _records[clientId] = rec;
                 if (rec.violationCount >= _kickThreshold)
-                    _ = BanAndKickAsync(clientId, attacker, "데미지핵");
+                {
+                    // BUG-12: 예외 무시 방지
+                    BanAndKickAsync(clientId, attacker, "데미지핵").ContinueWith(t =>
+                    {
+                        if (t.IsFaulted)
+                            Debug.LogError($"[ServerValidator] BanAndKick 예외: {t.Exception?.GetBaseException().Message}");
+                    }, System.Threading.Tasks.TaskScheduler.Default);
+                }
             }
             return maxAllowed;
         }
