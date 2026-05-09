@@ -271,9 +271,21 @@ public class InGameManager : MonoBehaviour
 
     private void CleanUpDisconnectedPlayers()
     {
-        // M-20: activeInHierarchy 대신 IsDead로 판정 — 사망 연출 중 일시적으로
-        // 비활성화된 플레이어를 "끊김"으로 오인하지 않는다.
-        int removed = alivePlayers.RemoveAll(p => p == null || p.IsDead);
+        // [버그 수정] p.IsDead 체크는 정상 사망자까지 "비정상 이탈" 로 분류하여
+        // OnPlayerDied 의 랭크 기록 경로를 우회시키는 치명 버그를 유발했음.
+        // → 모든 플레이어가 0위/패배로 처리되고 grant_match_rewards 가 Invalid rank 로 실패.
+        //
+        // 진짜 disconnected 검출은 NetworkObject 레벨에서:
+        //   - p == null                       : 오브젝트가 이미 파괴됨
+        //   - p.NetworkObject == null         : NetworkBehaviour 컴포넌트만 살아있음 (이상 상태)
+        //   - !p.NetworkObject.IsSpawned      : 클라이언트 끊김으로 NGO 가 Despawn 처리
+        // 사망 후에도 NetworkObject 는 살아있으므로 alivePlayers 에서 제거되지 않음.
+        // (사망 처리 + 랭크 기록은 OnPlayerDied 가 단독 담당)
+        int removed = alivePlayers.RemoveAll(p =>
+            p == null
+            || p.NetworkObject == null
+            || !p.NetworkObject.IsSpawned);
+
         if (removed > 0)
         {
             Debug.Log($"[InGameManager] 비정상 이탈 {removed}명 정리.");

@@ -563,11 +563,16 @@ public partial class SupabaseManager : MonoBehaviour
         }
         finally
         {
-            // M-11: Unsubscribe 이후 채널 핸들이 stale 상태가 되어 재구독 시 핸들러가
-            // 등록되지 않을 수 있으므로, null 처리하여 SubscribeLobbyChat에서 새로 생성하도록 한다.
-            _lobbyChatChannel = null;
-            _lobbyPresence = null;
-            _lobbyHandlersRegistered = false;
+            // [버그 수정 — 채널 평생 캐시]
+            // Supabase SDK 의 Client.Realtime.Channel("lobby-chat") 은 내부적으로 같은
+            // 인스턴스를 캐시한다. 우리가 _lobbyChatChannel = null 로 리셋해도 SDK 내부
+            // 캐시는 남아있어, 다음 Subscribe 시 받은 채널은 이미 핸들러가 등록된 상태.
+            // 그 상태에서 _lobbyHandlersRegistered=false 로 리셋하면 또 Register 시도하여
+            //   "Register can only be called with broadcast options for a channel once"
+            // 에러 발생 → 채널 영구 죽음 (접속자 0명 / 채팅 미수신).
+            //
+            // 해결: 채널 객체와 핸들러는 절대 null/false 로 리셋하지 않고 평생 유지.
+            // Subscribe / Unsubscribe 토글만 _isLobbyChannelSubscribed 로 관리.
             _isLobbyChannelSubscribed = false;
         }
     }
