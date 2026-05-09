@@ -92,8 +92,9 @@ public class PlayerController : NetworkBehaviour
             UnityEngine.InputSystem.EnhancedTouch.EnhancedTouchSupport.Enable();
 
             // 동적 스폰 시 씬에 배치된 조이스틱을 자동으로 연결
+            // Unity 6: FindObjectsInactive.Include 로 비활성 Canvas 의 조이스틱도 탐색
             if (movementJoystick == null)
-                movementJoystick = FindFirstObjectByType<VariableJoystick>();
+                movementJoystick = FindFirstObjectByType<VariableJoystick>(FindObjectsInactive.Include);
 
             // [외형 동기화] Owner 는 본인 직업을 이미 알고 있으므로
             // SubmitCharacterDataServerRpc 라운드트립 대기 없이 즉시 적용 → 깜빡임 제거.
@@ -251,19 +252,23 @@ public class PlayerController : NetworkBehaviour
     //  입력 처리 (Owner 전용)
     // ════════════════════════════════════════════════════════════
 
-    private bool _joystickLookupAttempted = false;
+    private float _joystickLookupCooldown = 0f;
 
     private void HandleJoystickInput()
     {
-        // [버그 수정] 매 프레임 FindFirstObjectByType 호출하던 버그.
-        // 1회만 시도하고 결과를 캐시. 실패해도 재탐색하지 않음.
-        if (movementJoystick == null && !_joystickLookupAttempted)
+        // [버그 수정] 인게임 씬 로드 직후엔 조이스틱 Canvas 가 비활성/미생성 상태일 수 있어
+        // 1회 탐색 후 영구 포기하면 조이스틱이 끝까지 null 로 남는 문제 발생.
+        // → 1초 간격으로 재시도 + Unity 6 의 FindObjectsInactive.Include 로 비활성도 포함.
+        if (movementJoystick == null)
         {
-            movementJoystick = FindFirstObjectByType<VariableJoystick>();
-            _joystickLookupAttempted = true;
+            _joystickLookupCooldown -= Time.deltaTime;
+            if (_joystickLookupCooldown <= 0f)
+            {
+                movementJoystick = FindFirstObjectByType<VariableJoystick>(FindObjectsInactive.Include);
+                _joystickLookupCooldown = 1f; // 못 찾으면 1초 후 재시도
+            }
+            if (movementJoystick == null) return;
         }
-
-        if (movementJoystick == null) return;
         
         moveDir.x = movementJoystick.Horizontal;
         moveDir.y = movementJoystick.Vertical;
