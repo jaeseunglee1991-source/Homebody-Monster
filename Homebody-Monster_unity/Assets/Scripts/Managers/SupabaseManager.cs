@@ -248,7 +248,7 @@ public partial class SupabaseManager : MonoBehaviour
                 {
                     var obj = Newtonsoft.Json.Linq.JObject.Parse(raw);
                     var token = obj["result"] ?? obj["available"];
-                    if (token != null) return token.Value<bool>();
+                    if (token != null) return (bool)token;
                 }
                 catch { /* ignore */ }
             }

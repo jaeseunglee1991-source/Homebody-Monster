@@ -15,4 +15,4 @@ MonoBehaviour:
   visuals:
   - job: 0
     animatorController: {fileID: 9100000, guid: 6096e0a624bd79b489ace7af3f7ca75f, type: 2}
-    defaultIdleSprite: {fileID: 5692671443236587484, guid: 16c180edcea552341a47570628259d20, type: 3}
+    defaultSprite: {fileID: 5692671443236587484, guid: 16c180edcea552341a47570628259d20, type: 3}

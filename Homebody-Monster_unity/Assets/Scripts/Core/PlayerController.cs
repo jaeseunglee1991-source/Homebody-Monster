@@ -152,8 +152,8 @@ public class PlayerController : NetworkBehaviour
         var registry = JobVisualRegistry.Instance;
         if (registry == null) return; // 워닝은 Instance getter 에서 1회 출력
 
-        var visual = registry.GetVisual((JobType)jobIndex);
-        if (visual == null) return;   // 등록 안 된 직업은 기본 외형 유지 (정상 동작)
+        // 등록되지 않은 직업이면 기본 외형 유지 (정상 동작)
+        if (!registry.TryGetVisual((JobType)jobIndex, out var visual)) return;
 
         if (animator != null && visual.animatorController != null)
         {
@@ -162,8 +162,8 @@ public class PlayerController : NetworkBehaviour
             animator.Rebind();
             animator.Update(0f);
         }
-        if (spriteRenderer != null && visual.defaultIdleSprite != null)
-            spriteRenderer.sprite = visual.defaultIdleSprite;
+        if (spriteRenderer != null && visual.defaultSprite != null)
+            spriteRenderer.sprite = visual.defaultSprite;
     }
 
     private void Start()
