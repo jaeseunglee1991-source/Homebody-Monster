@@ -2,6 +2,7 @@ using UnityEngine;
 using Supabase;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System.Collections.Generic;
 
 // ════════════════════════════════════════════════════════════════
@@ -522,13 +523,50 @@ public partial class SupabaseManager : MonoBehaviour
                 var broadcast = _lobbyChatChannel.Register<LobbyChatBroadcast>();
                 broadcast.AddBroadcastEventHandler((sender, payload) =>
                 {
-                    var typed = payload as LobbyChatBroadcast;
+                    // [채팅 #2 수정] Supabase Realtime broadcast 수신 시 SDK/서버 버전에 따라 페이로드 구조가
+                    //   ① flat: { nickname, message, sender_uuid, timestamp }, 또는
+                    //   ② nested: { type:"broadcast", event:"chat_message", payload:{...flat...} }
+                    // 둘 중 하나로 도달함. 기존 코드는 typed.Payload만 시도하여 nested 구조에서 모든 필드가 null이 되어
+                    // 다른 플레이어 화면에 닉네임 "???" + 빈 메시지로 표시되던 버그.
+                    string nick = null, msg = null, uuid = null;
+                    try
+                    {
+                        var typed = payload as LobbyChatBroadcast;
+                        if (typed?.Payload != null && !string.IsNullOrEmpty(typed.Payload.Nickname))
+                        {
+                            // Path A: SDK가 envelope을 벗긴 flat 페이로드
+                            nick = typed.Payload.Nickname;
+                            msg  = typed.Payload.Message;
+                            uuid = typed.Payload.SenderUuid;
+                        }
+                        else if (payload != null)
+                        {
+                            // Path B: SDK가 envelope을 그대로 넘김 → 한 단계 더 들어가서 파싱
+                            string raw = JsonConvert.SerializeObject(payload);
+                            var root  = JObject.Parse(raw);
+                            var p1    = root["payload"] as JObject;
+                            // p1이 inner 페이로드일 수도, 한 번 더 envelope일 수도 있음
+                            var inner = (p1?["payload"] as JObject) ?? p1;
+                            nick = inner?["nickname"]?.ToString();
+                            msg  = inner?["message"]?.ToString();
+                            uuid = inner?["sender_uuid"]?.ToString();
+                            if (string.IsNullOrEmpty(nick))
+                                Debug.LogWarning($"[Supabase] 채팅 페이로드 파싱 실패 — 원본: {raw}");
+                        }
+                    }
+                    catch (System.Exception parseEx)
+                    {
+                        Debug.LogError($"[Supabase] 채팅 수신 파싱 오류: {parseEx.Message}");
+                    }
+
+                    if (string.IsNullOrEmpty(nick)) nick = "알 수 없음";
+                    if (msg == null) msg = "";
+                    string capturedNick = nick;
+                    string capturedMsg  = msg;
+                    string capturedUuid = uuid ?? "";
                     MainThreadDispatcher.Enqueue(() =>
                     {
-                        string nick = typed?.Payload?.Nickname ?? "???";
-                        string msg  = typed?.Payload?.Message  ?? "";
-                        string uuid = typed?.Payload?.SenderUuid ?? "";
-                        OnLobbyChatReceived?.Invoke(nick, msg, uuid);
+                        OnLobbyChatReceived?.Invoke(capturedNick, capturedMsg, capturedUuid);
                     });
                 });
 
@@ -741,11 +779,11 @@ public partial class SupabaseManager : MonoBehaviour
             return;
         }
 
-        _pendingPresenceNickname = null;
-
         try
         {
             _lobbyPresence.Track(new LobbyPresence { Nickname = nickname });
+            // A-17: 성공 시에만 pending을 비움 — 실패 시엔 다음 SubscribeLobbyChat 완료 후 재시도되도록 보존.
+            _pendingPresenceNickname = null;
             Debug.Log($"[Supabase] ✅ Presence 등록 완료: {nickname}");
 
             // Track 직후 즉시 리스트 업데이트 시도
@@ -753,7 +791,9 @@ public partial class SupabaseManager : MonoBehaviour
         }
         catch (System.Exception e)
         {
-            Debug.LogWarning($"[Supabase] Presence Track 실패: {e.Message}");
+            // A-17: Track 실패 시 _pendingPresenceNickname을 유지하여 다음 SubscribeLobbyChat 진입 시 재시도.
+            _pendingPresenceNickname = nickname;
+            Debug.LogWarning($"[Supabase] Presence Track 실패: {e.Message} (재시도 대기)");
         }
     }
 

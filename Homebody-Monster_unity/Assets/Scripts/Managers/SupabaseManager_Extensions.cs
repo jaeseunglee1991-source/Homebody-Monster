@@ -135,6 +135,10 @@ public partial class SupabaseManager
     /// LeaderboardManager.SubmitMatchResult()는 DB 저장을 하지 않으며,
     /// 이 메서드는 별도 경로(로비 전적 새로고침 등)에서만 사용하세요.
     /// </summary>
+    // BUG-25: public 노출 시 향후 코드 수정에서 실수로 호출하면 NotifyMatchResultClientRpc → SaveMatchResultAsync
+    // 경로와 중복 저장 발생. [Obsolete]로 컴파일러 경고를 발생시켜 호출 시 즉시 인지하도록 함.
+    [System.Obsolete("직접 호출 금지 — 매치 결과는 NotifyMatchResultClientRpc → SaveMatchResultAsync 경로로만 저장됩니다. " +
+                     "이 메서드를 호출하면 동일 매치가 DB에 이중 저장됩니다.", false)]
     public async Task InsertMatchHistory(string userId, bool isWin, int rank, int kills, int survivalSeconds)
     {
         if (!IsInitialized || Client == null)

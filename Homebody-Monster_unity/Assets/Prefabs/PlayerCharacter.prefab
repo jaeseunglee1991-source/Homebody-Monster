@@ -17,6 +17,7 @@ GameObject:
   - component: {fileID: -5838187820538351456}
   - component: {fileID: -7295493613927672004}
   - component: {fileID: -516533588603172846}
+  - component: {fileID: 2623701044832885956}
   m_Layer: 0
   m_Name: PlayerCharacter
   m_TagString: Untagged
@@ -52,7 +53,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Unity.Netcode.Runtime::Unity.Netcode.NetworkObject
-  GlobalObjectIdHash: 1333719137
+  GlobalObjectIdHash: 3123732072
   InScenePlacedSourceGlobalObjectIdHash: 0
   DeferredDespawnTick: 0
   Ownership: 1
@@ -253,6 +254,23 @@ MonoBehaviour:
   thresholdPoor: 200
   highPingWarningMs: 150
   highPingWarningCount: 3
+--- !u!114 &2623701044832885956
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 217622531636576715}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 83e5c3996e1800f40972408bb8bd87c6, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::PlayerWorldUI
+  anchorOffset: {x: 0, y: 0.9, z: 0}
+  canvasScale: 0.01
+  hpBarColor: {r: 0.85, g: 0.25, b: 0.25, a: 1}
+  infoColor: {r: 1, g: 0.92, b: 0.55, a: 1}
+  nameColor: {r: 1, g: 1, b: 1, a: 1}
 --- !u!1 &3607358072939524198
 GameObject:
   m_ObjectHideFlags: 0

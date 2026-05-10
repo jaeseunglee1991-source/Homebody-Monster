@@ -63,6 +63,9 @@ public class ResultController : MonoBehaviour
     // ── AdMob 보상형 광고 ─────────────────────────────────────
     private RewardedAd _rewardedAd;
     private bool _isAdLoading = false;
+    // #4: 광고 로드 실패가 무한 반복되며 사용자가 영구히 "광고 준비 중" 상태에 머무는 UX 버그 방지.
+    private int _adLoadRetryCount = 0;
+    private const int MaxAdLoadRetries = 3;
 #endif
 
     private void Awake()
@@ -367,9 +370,20 @@ public class ResultController : MonoBehaviour
         }
         else
         {
-            Debug.LogWarning("[AdMob] 광고 아직 준비되지 않음 — 재로드 중");
+            // #4: 광고 로드 실패 시 무한 재시도 차단 — 일정 횟수 후 보상 없이 종료.
+            _adLoadRetryCount++;
+            if (_adLoadRetryCount > MaxAdLoadRetries)
+            {
+                Debug.LogWarning($"[AdMob] 광고 로드 {_adLoadRetryCount}회 실패 — 보너스 비활성화");
+                if (adBonusButtonText != null)
+                    adBonusButtonText.text = "📡 광고를 불러올 수 없어 보너스를 받을 수 없습니다.";
+                SetAdButtonInteractable(false);
+                if (adBonusButton != null) adBonusButton.gameObject.SetActive(false);
+                return;
+            }
+            Debug.LogWarning($"[AdMob] 광고 아직 준비되지 않음 — 재로드 중 ({_adLoadRetryCount}/{MaxAdLoadRetries})");
             if (adBonusButtonText != null)
-                adBonusButtonText.text = "📡 광고 준비 중... 잠시 후 다시 눌러주세요";
+                adBonusButtonText.text = $"📡 광고 준비 중... ({_adLoadRetryCount}/{MaxAdLoadRetries})";
             SetAdButtonInteractable(false);
             LoadRewardedAd();
             StartCoroutine(ReenableAdButtonAfterDelay(3f));

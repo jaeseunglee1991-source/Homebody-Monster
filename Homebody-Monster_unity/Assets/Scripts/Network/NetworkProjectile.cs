@@ -110,9 +110,15 @@ public class NetworkProjectile : NetworkBehaviour
 
     private void ApplyDamageAndStatus(PlayerNetworkSync targetSync)
     {
+        // NEW-15: Owner/Target이 Despawn(연결 끊김)된 직후의 짧은 윈도우에서 ServerData가 null이 되어
+        // CalculateDamageWithOverride 진입 시 NullReferenceException 발생. 모든 진입 조건을 명시적으로 가드.
+        if (_ownerSync == null || !_ownerSync.IsSpawned || _ownerSync.ServerData == null) return;
+        if (targetSync == null || !targetSync.IsSpawned || targetSync.ServerData == null) return;
+        if (targetSync.NetworkIsDead.Value) return;
+
         var ownerController = _ownerSync.GetComponent<PlayerController>();
         var targetController = targetSync.GetComponent<PlayerController>();
-        
+
         if (ownerController == null || targetController == null) return;
 
         // [Fix #2] baseAtk 임시 교체 패턴 제거 — 레이스 컨디션 방지.
@@ -138,6 +144,9 @@ public class NetworkProjectile : NetworkBehaviour
 
     private void ApplySkillDebuff(PlayerNetworkSync targetSync)
     {
+        // NEW-15: ServerData null 가드 추가 (Burn/Poison value 계산 시 baseAtk 접근).
+        if (_ownerSync == null || _ownerSync.ServerData == null) return;
+        if (targetSync == null || !targetSync.IsSpawned) return;
         switch (_skillType)
         {
             case ActiveSkillType.IceShards:

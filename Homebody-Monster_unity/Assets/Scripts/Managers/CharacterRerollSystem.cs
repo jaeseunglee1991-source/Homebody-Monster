@@ -203,6 +203,11 @@ public class CharacterRerollSystem : MonoBehaviour
 
     private async void OnRerollClicked()
     {
+        // BUG-18: 데디케이티드 서버에서는 IsOwner=true PlayerNetworkSync가 없으므로 항상 실패하여
+        // 무의미한 LogWarning이 발생. OpenRerollWindow와 동일하게 데디서버 early return.
+        if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer
+            && !NetworkManager.Singleton.IsHost) return;
+
         if (_isRolling) return;
 
         if (_rerollsUsed >= MaxRerollsPerMatch)
@@ -228,53 +233,78 @@ public class CharacterRerollSystem : MonoBehaviour
         if (claimButton != null) claimButton.interactable = false;
         SetStatus("처리 중...");
 
-        bool success = await SupabaseManager.Instance.SpendPizzaForReroll();
-
-        if (this == null) return;
-
-        _isRolling = false;
-
-        if (!success)
+        // A-5: 피자 차감 전에 IsOwner PlayerNetworkSync가 실제로 존재하는지 먼저 검증.
+        // 차감 후 sync 탐색 실패 시 "피자는 소모됐는데 리롤 효과는 없는" 결제 사기성 결함이 발생.
+        PlayerNetworkSync localSync = null;
+        foreach (var sync in FindObjectsByType<PlayerNetworkSync>(FindObjectsSortMode.None))
         {
-            SetStatus($"피자가 부족합니다. (필요: 🍕{RerollCostPizza})");
-            if (claimButton != null) claimButton.interactable = CanReroll();
+            if (sync.IsOwner) { localSync = sync; break; }
+        }
+        if (localSync == null)
+        {
+            SetStatus("플레이어 정보를 찾을 수 없습니다. 잠시 후 다시 시도해주세요.");
+            Debug.LogError("[Reroll] PlayerNetworkSync(IsOwner) 미존재 → 결제 차단 (피자 보존)");
             return;
         }
 
-        // 피자 차감 성공: 로컬 캐시 갱신
-        if (GameManager.Instance != null)
-            GameManager.Instance.pizzaCount =
-                Mathf.Max(0, GameManager.Instance.pizzaCount - RerollCostPizza);
-
-        // 새 캐릭터 생성
-        string nickname = GameManager.Instance?.currentPlayerNickname ?? "";
-        CharacterData newData = StatCalculator.GenerateRandomCharacter(nickname);
-        if (GameManager.Instance != null)
-            GameManager.Instance.myCharacterData = newData;
-
-        // 서버에 새 스탯 재제출
-        bool syncFound = false;
-        foreach (var sync in FindObjectsByType<PlayerNetworkSync>(FindObjectsSortMode.None))
+        // HIGH-03: 기존엔 try-finally가 없어 SpendPizzaForReroll/ResubmitCharacterData 등에서 예외 발생 시
+        // _isRolling=true가 영구히 남아 같은 세션 내 리롤 버튼이 회복 불가능하게 잠기던 버그.
+        try
         {
-            if (sync.IsOwner)
+            bool success = await SupabaseManager.Instance.SpendPizzaForReroll();
+
+            if (this == null) return;
+
+            if (!success)
             {
-                sync.ResubmitCharacterData();
-                syncFound = true;
-                break;
+                SetStatus($"피자가 부족합니다. (필요: 🍕{RerollCostPizza})");
+                return;
+            }
+
+            // 피자 차감 성공: 로컬 캐시 갱신
+            if (GameManager.Instance != null)
+                GameManager.Instance.pizzaCount =
+                    Mathf.Max(0, GameManager.Instance.pizzaCount - RerollCostPizza);
+
+            // 새 캐릭터 생성
+            string nickname = GameManager.Instance?.currentPlayerNickname ?? "";
+            CharacterData newData = StatCalculator.GenerateRandomCharacter(nickname);
+            if (GameManager.Instance != null)
+                GameManager.Instance.myCharacterData = newData;
+
+            // 서버에 새 스탯 재제출 (A-5: 사전 검증된 sync 사용)
+            // await 동안 sync가 Despawn될 가능성 재확인
+            if (localSync != null && localSync.IsSpawned)
+            {
+                localSync.ResubmitCharacterData();
+            }
+            else
+            {
+                Debug.LogWarning("[Reroll] await 도중 PlayerNetworkSync가 Despawn됨 — 다음 스폰 시 새 스탯 자동 적용");
+            }
+
+            _rerollsUsed++;
+
+            SetStatus("");
+
+            Debug.Log($"[Reroll] 리롤 완료 — 직업={newData.job}, 등급={newData.grade}, " +
+                      $"HP={newData.maxHp:F0}, ATK={newData.baseAtk:F1}, " +
+                      $"사용횟수={_rerollsUsed}/{MaxRerollsPerMatch}");
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"[Reroll] 처리 중 오류: {e.Message}");
+            if (this != null) SetStatus("오류가 발생했습니다. 다시 시도해주세요.");
+        }
+        finally
+        {
+            if (this != null)
+            {
+                _isRolling = false;
+                if (claimButton != null) claimButton.interactable = CanReroll();
+                RefreshUI();
             }
         }
-        if (!syncFound)
-            Debug.LogWarning("[Reroll] PlayerNetworkSync(IsOwner)를 찾지 못했습니다. " +
-                             "새 캐릭터 스탯이 서버에 반영되지 않았습니다.");
-
-        _rerollsUsed++;
-
-        SetStatus("");
-        RefreshUI();
-
-        Debug.Log($"[Reroll] 리롤 완료 — 직업={newData.job}, 등급={newData.grade}, " +
-                  $"HP={newData.maxHp:F0}, ATK={newData.baseAtk:F1}, " +
-                  $"사용횟수={_rerollsUsed}/{MaxRerollsPerMatch}");
     }
 
     // ════════════════════════════════════════════════════════════

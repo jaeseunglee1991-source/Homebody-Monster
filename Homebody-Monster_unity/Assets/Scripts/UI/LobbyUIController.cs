@@ -161,7 +161,14 @@ public class LobbyUIController : MonoBehaviour
         if (_isNicknameLoaded && !_isChatReady)
         {
             Debug.LogWarning("[LobbyUI] 채팅 채널 연결 타임아웃 — 재연결 시도");
-            AppNetworkManager.Instance?.ConnectToLobby();
+            // BUG-12: 재시도 시 OnLobbyChatReady에 HandleLobbyChatReady가 중복 구독되는 것을 방지.
+            // ConnectToLobby() 내부의 OnLobbyChatReady?.Invoke()가 같은 핸들러를 N회 호출하게 되는 누적 버그.
+            if (AppNetworkManager.Instance != null)
+            {
+                AppNetworkManager.Instance.OnLobbyChatReady -= HandleLobbyChatReady;
+                AppNetworkManager.Instance.OnLobbyChatReady += HandleLobbyChatReady;
+                AppNetworkManager.Instance.ConnectToLobby();
+            }
         }
         else if (!_isNicknameLoaded)
         {
@@ -288,6 +295,23 @@ public class LobbyUIController : MonoBehaviour
 #endif
     }
 
+    // [#1 수정] 모바일 백그라운드 전환 시에도 Untrack을 시도해 다른 플레이어 화면에서
+    // 즉시 사라지도록 함. OnApplicationPause(true)는 OnDestroy보다 먼저 발화되므로 별도 처리 필요.
+    private void OnApplicationPause(bool pauseStatus)
+    {
+        if (!pauseStatus) return;
+        // 백그라운드 진입 직전 Untrack 시도(fire-and-forget). SupabaseManager는 DontDestroyOnLoad라
+        // OS가 프로세스를 종료하기 전 짧은 기간 동안 실행될 수 있다.
+        if (SupabaseManager.Instance != null)
+            _ = SupabaseManager.Instance.UntrackLobbyPresence();
+    }
+
+    private void OnApplicationQuit()
+    {
+        if (SupabaseManager.Instance != null)
+            _ = SupabaseManager.Instance.UntrackLobbyPresence();
+    }
+
     private void OnDestroy()
     {
         // 🧹 씬 전환 시 참조 해제 (MissingReferenceException 에러 방지)
@@ -299,6 +323,9 @@ public class LobbyUIController : MonoBehaviour
             AppNetworkManager.Instance.OnLobbyChatReady        -= HandleLobbyChatReady;
 
             // Supabase Realtime 채팅 채널 구독 해제 (로비 전용이므로 씬 이탈 시 정리)
+            // [#1 수정] 매칭 성사 흐름은 MatchmakingUX에서 이미 awaitable 버전으로 사전 정리하지만,
+            // 그 외 경로(예외 종료/씬 강제 전환 등)를 위해 fire-and-forget도 유지.
+            // SupabaseManager는 DontDestroyOnLoad이므로 씬 전환 후에도 Untrack/Unsubscribe Task가 완료된다.
             AppNetworkManager.Instance.DisconnectLobbyChat();
         }
 
@@ -343,8 +370,12 @@ public class LobbyUIController : MonoBehaviour
         }
 
         // ⌨️ 엔터키 전송 지원 (New Input System 에러 방지 및 UX 향상)
+        // A-22: 엔터키는 sendChatButton.interactable과 무관하게 발화하므로 채팅 미준비 상태에서
+        // OnClickSendChat이 호출되어 무음 실패. interactable 또는 _isChatReady 가드 추가.
         chatInputField.onSubmit.AddListener((val) =>
         {
+            if (!_isChatReady || !_isNicknameLoaded) return;
+            if (sendChatButton != null && !sendChatButton.interactable) return;
             OnClickSendChat();
             // 전송 후 바로 다시 입력할 수 있게 포커스 유지
             chatInputField.ActivateInputField();

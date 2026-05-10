@@ -76,6 +76,8 @@ public class DamagePopup : MonoBehaviour
         if (DamagePopupPool.Instance != null)
             DamagePopupPool.Instance.Release(this);
         else
-            gameObject.SetActive(false);
+            // BUG-16: 씬 전환 시 풀이 먼저 파괴된 경우 SetActive(false)는 풀 미반환 + 활성 팝업 잔류.
+            // 명시적 Destroy로 정리하여 다음 씬에서 풀 용량 부족/누수 방지.
+            Destroy(gameObject);
     }
 }

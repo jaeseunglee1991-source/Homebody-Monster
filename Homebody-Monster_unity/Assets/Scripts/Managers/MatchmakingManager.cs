@@ -201,13 +201,11 @@ public class MatchmakingManager : MonoBehaviour
         NotifyStatus("매칭 서버에 연결 중...");
 
         // [버그 수정] 이전 세션 OnDestroy에서 정리 미완료된 큐 엔트리 회수.
+        // C-1: 기존엔 플래그 분기 후 무조건 한번 더 호출하여 leave_matchmaking_queue RPC가 매번 2회 발생.
+        // 정상 세션(이미 큐에 없음)에서도 불필요한 RPC + 에러 로그 누적 → 1회만 호출.
         string pendingKey = $"PendingQueueCleanup_{myPlayerId}";
         if (PlayerPrefs.GetInt(pendingKey, 0) == 1)
-        {
-            await CleanupMyPreviousEntry();
             PlayerPrefs.DeleteKey(pendingKey);
-        }
-
         await CleanupMyPreviousEntry();
 
         // [Fix] 이전 큐 항목 DB 반영 대기.
@@ -535,6 +533,10 @@ public class MatchmakingManager : MonoBehaviour
         }
         catch (Exception e)
         {
+            // BUG-06: ExecuteServerMatch 실패 시 PendingExpectedPlayerCount를 0으로 초기화.
+            // 미초기화 시 다음 매치의 NetworkSpawnManager.OnNetworkSpawn에서 이전 실패 인원 수가
+            // 그대로 expectedPlayerCount로 적용되어 잘못된 인원 대기 발생.
+            NetworkSpawnManager.PendingExpectedPlayerCount = 0;
             Debug.LogError($"[Server] 매칭 DB 업데이트 실패: {e.Message}");
             // H-23: server_assign_match 실패 시 큐에 남은 플레이어들의 상태를
             // 'cancelled'로 업데이트하여 무한 대기 방지.
@@ -616,9 +618,11 @@ public class MatchmakingManager : MonoBehaviour
             // [Fix] 현재 세션의 큐 ID와 일치하는지 검증.
             // 이전 세션의 matched 항목 이벤트가 새 구독 직후 뒤늦게 도달하여
             // 즉시 HandleMatchSuccess가 호출되는 버그 방지.
-            if (!string.IsNullOrEmpty(myQueueEntryId) && updated.Id != myQueueEntryId)
+            // H-1: myQueueEntryId가 아직 null/empty인 시점(InsertQueueEntry 응답 전)에 도달한
+            // 이전 세션의 stale matched 이벤트가 가드를 통과해 의도치 않은 게임 진입을 유발하던 버그.
+            if (string.IsNullOrEmpty(myQueueEntryId) || updated.Id != myQueueEntryId)
             {
-                Debug.LogWarning($"[Matchmaking] 이전 세션 항목 UPDATE 무시: {updated.Id}");
+                Debug.LogWarning($"[Matchmaking] 무관/이전 세션 항목 UPDATE 무시: {updated.Id}");
                 return;
             }
 
@@ -732,7 +736,20 @@ public class MatchmakingManager : MonoBehaviour
                 catch (Exception e2)
                 {
                     Debug.LogError($"[Matchmaking] 큐 엔트리 직접 삭제 실패: {e2.Message}");
+                    // BUG-07: RPC와 폴백 DELETE 모두 실패 시 좀비 큐 엔트리가 DB에 잔류.
+                    // 다음 접속 시 StartSearch에서 회수하도록 PlayerPrefs 플래그 설정.
+                    if (!string.IsNullOrEmpty(myPlayerId))
+                    {
+                        PlayerPrefs.SetInt($"PendingQueueCleanup_{myPlayerId}", 1);
+                        PlayerPrefs.Save();
+                    }
                 }
+            }
+            else if (!string.IsNullOrEmpty(myPlayerId))
+            {
+                // RPC 실패 + myQueueEntryId 없음(취소 직후/스타트업 정리 등) → 다음 접속 시 재시도.
+                PlayerPrefs.SetInt($"PendingQueueCleanup_{myPlayerId}", 1);
+                PlayerPrefs.Save();
             }
         }
     }

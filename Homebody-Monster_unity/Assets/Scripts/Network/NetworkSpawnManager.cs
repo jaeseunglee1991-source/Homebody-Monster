@@ -185,6 +185,11 @@ public class NetworkSpawnManager : NetworkBehaviour
 
         // [Fix-6] 클라이언트별 NetworkPingMonitor 스폰 (해당 클라이언트가 Owner).
         // 서버는 비-Owner 인스턴스로서 RPC만 라우팅하고, 측정은 각 클라이언트에서 수행한다.
+        if (pingMonitorPrefab == null)
+        {
+            // BUG-19: Inspector 미설정 시 무음 실패 → PingHUD가 "-- ms"만 표시.
+            Debug.LogWarning("[NetworkSpawnManager] pingMonitorPrefab이 미설정되어 핑 측정이 비활성화됩니다.");
+        }
         if (pingMonitorPrefab != null)
         {
             var pingObj    = Instantiate(pingMonitorPrefab);

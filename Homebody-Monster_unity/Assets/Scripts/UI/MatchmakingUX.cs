@@ -209,7 +209,18 @@ public class MatchmakingUX : MonoBehaviour
                         : (GameManager.Instance?.gameServerPort ?? AppNetworkManager.DefaultPort);
 
         if (!string.IsNullOrEmpty(ip))
+        {
+            // [#1 수정] 게임 서버 접속 직전 로비 Presence Untrack을 완료시켜 다른 로비 플레이어들의
+            // 접속자 목록이 즉시 갱신되도록 함. 최대 500ms 대기 후 진행(접속 지연 방지).
+            if (AppNetworkManager.Instance != null)
+            {
+                var untrackTask = AppNetworkManager.Instance.DisconnectLobbyChatAwaitable();
+                float deadline = Time.time + 0.5f;
+                while (Time.time < deadline && untrackTask != null && !untrackTask.IsCompleted)
+                    yield return null;
+            }
             AppNetworkManager.Instance?.ConnectToGameServer(ip, port);
+        }
         else
             Debug.LogError("[MatchmakingUX] 게임 서버 IP를 알 수 없어 접속 불가.");
     }

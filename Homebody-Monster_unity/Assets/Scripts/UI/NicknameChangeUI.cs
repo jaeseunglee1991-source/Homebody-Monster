@@ -257,10 +257,17 @@ public class NicknameChangeUI : MonoBehaviour
         if (!NicknameRegex.IsMatch(name))
             return "한글/영문으로 시작하고, 한글·영문·숫자·_만 사용 가능합니다.";
 
+        // L-5: 닉네임은 정확 일치 비교 + 4자 이상만 부분 매칭으로 정상 닉네임 false-positive 방지.
         string lower = name.ToLower();
+        foreach (string bad in ForbiddenWords.NicknameExactBlockList)
+            if (lower == bad.ToLower())
+                return "사용할 수 없는 단어가 포함되어 있습니다.";
         foreach (string bad in ForbiddenWords.List)
+        {
+            if (bad.Length < 4) continue;
             if (lower.Contains(bad.ToLower()))
                 return "사용할 수 없는 단어가 포함되어 있습니다.";
+        }
 
         return null;
     }

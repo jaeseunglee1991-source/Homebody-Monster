@@ -113,6 +113,10 @@ public class ServerValidator : MonoBehaviour
 
                 if (rec.violationCount >= _kickThreshold)
                 {
+                    // BUG-10: BanAndKickAsync 호출 전에 _records에서 제거하여 같은 프레임/다음 FixedUpdate에서
+                    // 같은 clientId로 재진입 시 BanAndKickAsync가 이중 호출되는 것을 차단.
+                    // 이중 호출 시 ban_logs 중복 기록 + DisconnectClient 중복 호출 발생.
+                    _records.Remove(clientId);
                     // BUG-12: 예외 무시 → ContinueWith로 실패 시 로그 출력
                     BanAndKickAsync(clientId, sync, type).ContinueWith(t =>
                     {
@@ -146,6 +150,8 @@ public class ServerValidator : MonoBehaviour
                 _records[clientId] = rec;
                 if (rec.violationCount >= _kickThreshold)
                 {
+                    // BUG-10: 재진입 방지를 위해 _records에서 즉시 제거.
+                    _records.Remove(clientId);
                     // BUG-12: 예외 무시 방지
                     BanAndKickAsync(clientId, attacker, "데미지핵").ContinueWith(t =>
                     {
@@ -186,9 +192,10 @@ public class ServerValidator : MonoBehaviour
         // PlayerNetworkSync._serverUserId(클라이언트가 SubmitCharacterDataServerRpc로 전달한 ID)로 변경.
         // 데디케이티드 서버의 GameManager는 로그인 계정이 없으므로 currentPlayerId가 빈값이거나
         // 서버 관리자 계정 ID가 들어있어 치트 플레이어 ID가 ban_logs에 기록되지 않는 버그.
-        string userId   = (!string.IsNullOrEmpty(sync?.ServerUserId) ? sync.ServerUserId : null)
-                          ?? sync?.ServerData?.playerName
-                          ?? "unknown";
+        // BUG-11: ServerUserId가 비어 있으면 ban_logs.user_id(UUID 컬럼)에 닉네임이 들어가
+        // 운영 시 밴 기록 조회/관리가 불가능해지는 데이터 오염이 발생.
+        // playerName(닉네임) fallback을 제거하고 "unknown"으로 명시 표시.
+        string userId   = !string.IsNullOrEmpty(sync?.ServerUserId) ? sync.ServerUserId : "unknown";
         string nickname = sync?.NetworkNickname.Value.ToString() ?? "unknown";
 
         Debug.LogError($"[ServerValidator] BAN: clientId={clientId}, userId={userId}, 사유={reason}");

@@ -41,6 +41,15 @@ public class PushNotificationManager : MonoBehaviour
 
     private void Start()
     {
+        // NEW-12: Android JNI 호출(NotificationChannel 등록, AlarmManager 스케줄 등)이
+        // Start()에서 동기 실행되어 첫 진입 시 ~수백ms 메인 스레드 블로킹 → 로그인씬 렌더 지연.
+        // 1프레임 양보 후 실행하여 첫 프레임 렌더는 보장.
+        StartCoroutine(InitializeDeferred());
+    }
+
+    private System.Collections.IEnumerator InitializeDeferred()
+    {
+        yield return null; // 첫 프레임 렌더 후 실행
         InitializeNotificationChannels();
         InitializeFirebaseMessaging();
         ScheduleDailyRewardNotification();

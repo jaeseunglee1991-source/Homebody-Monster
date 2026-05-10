@@ -282,8 +282,16 @@ public class PlayerController : NetworkBehaviour
 
     private void HandleTouchAttackInput()
     {
+        // M-2: OnNetworkDespawn에서 EnhancedTouchSupport.Disable() 후 같은 프레임 Update에서
+        // Touch.activeTouches 접근 시 InvalidOperationException 발생하던 버그.
+        if (!UnityEngine.InputSystem.EnhancedTouch.EnhancedTouchSupport.enabled) return;
         var activeTouches = UnityEngine.InputSystem.EnhancedTouch.Touch.activeTouches;
         if (attackLocked || activeTouches.Count == 0) return;
+
+        // MEDIUM-02: 씬 전환 직후 mainCam이 null일 수 있음 (정적 캐시가 이전 씬 카메라를 가리키다 파괴됨).
+        // ScreenToWorldPoint 호출 전 회복 시도 후 여전히 null이면 안전하게 종료.
+        if (mainCam == null) mainCam = Camera.main;
+        if (mainCam == null) return;
 
         foreach (var touch in activeTouches)
         {

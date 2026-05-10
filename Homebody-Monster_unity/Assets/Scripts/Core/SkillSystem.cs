@@ -36,8 +36,18 @@ public static class SkillSystem
         { ActiveSkillType.FryingPan,4f },{ ActiveSkillType.BurningOil,6f },{ ActiveSkillType.SnackTime,12f },{ ActiveSkillType.FeastTime,20f },
     };
 
-    public static float GetCooldown(ActiveSkillType skill) =>
-        Cooldowns.TryGetValue(skill, out float cd) ? cd : 10f;
+    public static float GetCooldown(ActiveSkillType skill)
+    {
+        // L-4: GameBalanceConfig.SkillCooldownOverrides가 정의되어 있으나 SkillSystem이 미참조하여
+        // Inspector에서 쿨다운 오버라이드를 설정해도 실제 게임에 적용되지 않던 버그.
+        var cfg = GameBalanceConfig.Get();
+        if (cfg != null)
+        {
+            float overridden = cfg.GetSkillCooldownOverride(skill);
+            if (overridden > 0f) return overridden;
+        }
+        return Cooldowns.TryGetValue(skill, out float cd) ? cd : 10f;
+    }
 
     // ════════════════════════════════════════════════════════════
     //  서버 전용 진입점
@@ -435,6 +445,15 @@ public static class SkillSystem
                     ? tVel.normalized
                     : (serverFacing != Vector2.zero ? -serverFacing : Vector2.right);
                 Vector2 dest = (Vector2)t.transform.position - tFacing * 0.8f;
+                // NEW-14: 목적지가 벽 안쪽일 수 있는 케이스 보정 — Linecast로 벽 사이 충돌 시
+                // 충돌 지점에서 약간 떨어진 위치로 클램프하여 ShadowRaid가 벽을 관통해 끼이지 않도록 함.
+                // ObstacleLayer는 Physics2D 기본 레이어 마스크 사용(LayerMask 미지정 시 기본값으로 모든 콜라이더).
+                Vector2 origin = caster.transform.position;
+                int wallMask = LayerMask.GetMask("Obstacle", "Wall");
+                if (wallMask == 0) wallMask = Physics2D.DefaultRaycastLayers;
+                var hit = Physics2D.Linecast(origin, dest, wallMask);
+                if (hit.collider != null)
+                    dest = hit.point - (hit.point - origin).normalized * 0.3f; // 벽 직전에서 정지
                 // [Fix] 안티치트 텔레포트 오탐지 방지 — 서버 권한 텔레포트 면제 등록.
                 ServerValidator.Instance?.RegisterSkillTeleport(caster.networkSync.OwnerClientId);
                 // Owner 클라이언트에게 순간이동 지시 (ClientNetworkTransform 권한 대응)
@@ -693,8 +712,12 @@ public static class SkillSystem
                 lastHitTime = elapsed;
 
                 // 트랩 피격 — 캡처된 baseAtk 사용 (시전자 Despawn 무관)
-                t.networkSync.ApplyDamageServer(capturedBaseAtk * 1.5f, casterSync);
-                t.networkSync.ApplyStatusEffectServer(StatusEffectType.Slow, 2f, 0.6f, casterSync);
+                // BUG-04: casterSync가 Despawn된 상태로 ApplyDamageServer에 전달되면
+                // ProcessDeath → effectiveAttacker._controller.StatusFX 등 무효 참조로 NRE 가능.
+                // 시전자 Despawn 시 source=null 로 전달하여 자해(킬 크레딧 없음) 경로로 처리.
+                var effectiveCasterSync = (casterSync != null && casterSync.IsSpawned) ? casterSync : null;
+                t.networkSync.ApplyDamageServer(capturedBaseAtk * 1.5f, effectiveCasterSync);
+                t.networkSync.ApplyStatusEffectServer(StatusEffectType.Slow, 2f, 0.6f, effectiveCasterSync);
 
                 // [BUG-13] 피격 시 시각 효과 전파 — casterSync Despawn 시 피격 대상의 sync로 폴백
                 var notifier = (casterSync != null && casterSync.IsSpawned)
@@ -714,9 +737,24 @@ public static class SkillSystem
         {
             // BUG-09: 시전자 Despawn 시에도 살아있는 임의의 PlayerNetworkSync를 통해
             // RemoveTrapVisualClientRpc를 송신하여 클라이언트의 덫 시각 오브젝트가 잔류하지 않도록 함.
-            PlayerNetworkSync sender = (casterSync != null && casterSync.IsSpawned)
-                ? casterSync
-                : Object.FindAnyObjectByType<PlayerNetworkSync>();
+            // H-10: FindAnyObjectByType는 씬 전체 탐색 + 비결정적 결과 + 모든 플레이어 사망 시 null 반환으로
+            // 클라이언트의 덫 시각 오브젝트가 영구 잔존하던 버그. InGameManager.AlivePlayers를 우선 사용.
+            PlayerNetworkSync sender = null;
+            if (casterSync != null && casterSync.IsSpawned)
+            {
+                sender = casterSync;
+            }
+            else if (InGameManager.Instance != null)
+            {
+                foreach (var p in InGameManager.Instance.AlivePlayers)
+                {
+                    if (p?.networkSync != null && p.networkSync.IsSpawned)
+                    {
+                        sender = p.networkSync;
+                        break;
+                    }
+                }
+            }
             if (sender != null && sender.IsSpawned)
                 sender.RemoveTrapVisualClientRpc(trapPos);
         }
@@ -834,13 +872,15 @@ public static class SkillSystem
     // H-9 / H-20: 정적 버퍼 (32) — 매 호출 GC 할당 제거
     private static readonly Collider2D[] _overlapBuffer = new Collider2D[32];
     private static readonly Collider2D[] _trapOverlapBuffer = new Collider2D[32];
-    private static readonly List<PlayerController> _enemyBuffer = new List<PlayerController>(32);
 
     private static List<PlayerController> GetEnemiesInRadius(
         PlayerController caster, float radius, Vector2? center = null)
     {
         Vector2 pos = center ?? (Vector2)caster.transform.position;
-        _enemyBuffer.Clear();
+        // BUG-17: 정적 _enemyBuffer는 AoE → Thorns 반사 → ProcessDeath → DeathMark 폭발 등
+        // 같은 프레임 재진입 시 현재 순회 중인 버퍼가 덮어씌워져 ArgumentOutOfRangeException/잘못된 대상 처리 유발.
+        // 작은 List(보통 0~8명)이므로 재진입 안전성을 위해 매 호출 새 List 할당을 허용.
+        var result = new List<PlayerController>(8);
         // enemyLayer 제거: PlayerVisibility가 은신 시 레이어를 "IgnorePointer"로 바꾸므로
         // enemyLayer(="Enemy")로 필터하면 은신 적이 피해 판정에서 완전 제외되는 버그 발생.
         // 서버 피해 판정은 레이어 무관하게 탐지하고, 아래 pc 타입·사망·팀 필터로 제한.
@@ -852,10 +892,9 @@ public static class SkillSystem
             var pc = col.GetComponent<PlayerController>();
             if (pc != null && !pc.IsDead && pc != caster &&
                 pc.networkSync != null && !pc.networkSync.NetworkIsDead.Value)
-                _enemyBuffer.Add(pc);
+                result.Add(pc);
         }
-        // 호출자가 반환된 List를 보관/재사용하지 않으므로 정적 버퍼 직접 반환
-        return _enemyBuffer;
+        return result;
     }
 
     private static List<PlayerController> GetEnemiesInCone(

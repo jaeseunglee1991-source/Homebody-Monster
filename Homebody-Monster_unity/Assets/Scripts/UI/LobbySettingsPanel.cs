@@ -306,8 +306,16 @@ public class LobbySettingsPanel : MonoBehaviour
         CloseSettingsImmediate();
 
         // [NEW-06] 매칭 탐색 중이면 취소 — DisconnectAsync 전에 RPC 완료를 보장
+        // BUG-20: async void에서 미보호 await 예외는 UnhandledException → 앱 크래시.
+        // CancelMatchmakingAsync 내부 Supabase RPC 실패도 try/catch로 흡수.
         if (MatchmakingManager.Instance != null && MatchmakingManager.Instance.IsSearching)
-            await MatchmakingManager.Instance.CancelMatchmakingAsync();
+        {
+            try { await MatchmakingManager.Instance.CancelMatchmakingAsync(); }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning($"[LobbySettingsPanel] 매칭 취소 오류 (무시): {e.Message}");
+            }
+        }
 
         // Supabase 세션 로그아웃
         if (SupabaseManager.Instance != null

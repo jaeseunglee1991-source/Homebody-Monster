@@ -144,6 +144,13 @@ public class AppNetworkManager : MonoBehaviour
     public async void DisconnectLobbyChat() => await DisconnectLobbyChatAsync();
 
     /// <summary>
+    /// [#1 수정] 로비 채팅 정리의 awaitable 공개 버전.
+    /// 매칭 시작·로그아웃 등 로비를 떠나기 직전 호출하면 Untrack 완료를 기다려
+    /// 다른 플레이어 화면의 접속자 목록이 즉시 갱신되도록 보장한다.
+    /// </summary>
+    public Task DisconnectLobbyChatAwaitable() => DisconnectLobbyChatAsync();
+
+    /// <summary>
     /// 로비 채팅 채널 정리 내부 구현 (awaitable).
     /// DisconnectAsync()와 DisconnectLobbyChat() 양쪽에서 호출됩니다.
     /// </summary>
@@ -198,7 +205,13 @@ public class AppNetworkManager : MonoBehaviour
         }
         finally
         {
-            if (!readyInvoked) OnLobbyChatReady?.Invoke();
+            // BUG-22: 구독 실패/Supabase 미초기화 시에도 OnLobbyChatReady를 발생시키면
+            // sendChatButton.interactable=true로 활성화되지만 실제 전송 시 IsLobbyChatSubscribed=false로
+            // 차단되어 "[시스템]: 채팅 서버에 연결되지 않았습니다." 표시 — UX 혼란.
+            // 대신 신호를 발송하지 않으면 LobbyUIController.ChatButtonTimeoutRoutine이 10초 후
+            // 자동으로 재연결을 시도한다.
+            if (!readyInvoked)
+                Debug.LogWarning("[AppNetworkManager] OnLobbyChatReady 미발송 — ChatButtonTimeoutRoutine이 재시도");
         }
     }
 
@@ -220,14 +233,25 @@ public class AppNetworkManager : MonoBehaviour
     private void HandleLobbyChatReceived(string nickname, string message, string senderUuid)
     {
         // H-8: 내가 보낸 메시지는 UUID로 정확히 식별 (동명이인 충돌 방지)
-        string myUuid = GameManager.Instance?.currentPlayerId;
-        if (!string.IsNullOrEmpty(senderUuid) && !string.IsNullOrEmpty(myUuid) && senderUuid == myUuid)
-            return;
-
-        // UUID 누락(레거시 클라이언트) 시 닉네임 폴백
-        if (string.IsNullOrEmpty(senderUuid))
+        // M-3: myUuid가 null(세션 만료/로그아웃 직후 등)일 때 senderUuid 가드를 통과해
+        // 내 메시지가 로컬 에코 + 수신으로 2회 표시되던 버그. UUID가 있어도 myUuid 부재 시
+        // 닉네임 폴백으로 자기 메시지 식별.
+        string myUuid     = GameManager.Instance?.currentPlayerId;
+        string myNickname = GameManager.Instance?.currentPlayerNickname;
+        if (!string.IsNullOrEmpty(senderUuid))
         {
-            string myNickname = GameManager.Instance?.currentPlayerNickname;
+            if (!string.IsNullOrEmpty(myUuid))
+            {
+                if (senderUuid == myUuid) return;
+            }
+            else if (!string.IsNullOrEmpty(myNickname) && nickname == myNickname)
+            {
+                return;
+            }
+        }
+        else
+        {
+            // UUID 누락(레거시 클라이언트) 시 닉네임 폴백
             if (!string.IsNullOrEmpty(myNickname) && nickname == myNickname) return;
         }
 
@@ -283,17 +307,20 @@ public class AppNetworkManager : MonoBehaviour
             ? NetworkManager.Singleton.DisconnectReason
             : "연결이 끊어졌습니다.";
 
-        if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer)
+        // H-9: 데디케이티드 서버(IsServer && !IsHost)는 다른 클라이언트 이탈을 OnClientDisconnected로 알릴 필요 없으나,
+        // Listen-server(Host)는 자기 자신의 NGO 연결이 끊기는 경우 ReconnectManager 트리거가 필요.
+        // 기존 IsServer 분기로는 호스트 환경 QA에서 재접속 로직이 절대 동작하지 않아 검증 불가능했음.
+        var netMgr = NetworkManager.Singleton;
+        bool isDedicatedServer = netMgr != null && netMgr.IsServer && !netMgr.IsHost;
+        if (isDedicatedServer)
         {
-            // ── 서버: 이탈한 클라이언트는 NetworkSpawnManager.HandleClientDisconnected가
-            //   사망 처리(OnPlayerDied) + alivePlayers 정리를 담당하므로
-            //   여기서 OnPlayerDisconnected를 호출하면 이중 처리 + CheckWinCondition 2회 실행 발생.
-            //   → 로그만 남기고 위임. (BUG-01)
+            // ── 데디케이티드 서버: 이탈한 클라이언트는 NetworkSpawnManager.HandleClientDisconnected가
+            //   사망 처리(OnPlayerDied) + alivePlayers 정리를 담당하므로 여기서는 로그만 남김. (BUG-01)
             Debug.LogWarning($"[AppNetworkManager] ⚠️ 클라이언트 이탈 감지 (clientId: {clientId})");
         }
         else
         {
-            // ── 클라이언트: 로컬 유저가 서버와 연결이 끊긴 경우 ──
+            // ── 클라이언트 / 호스트: 본인 NGO 세션이 끊긴 경우 → 재접속 흐름 트리거 ──
             Debug.LogWarning($"[AppNetworkManager] ⚠️ 서버 연결 해제: {reason}");
             OnClientDisconnected?.Invoke(reason);
         }

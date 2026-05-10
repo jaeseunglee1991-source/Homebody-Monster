@@ -91,6 +91,15 @@ public class GameManager : MonoBehaviour
             catch (System.Exception e)
             { Debug.LogWarning($"[GameManager] Disconnect 오류 (무시): {e.Message}"); }
         }
+        // H-11: NGO Shutdown 직후 IsListening이 즉시 false가 되지 않아 LoadingScreenManager가
+        // 동기 SceneManager.LoadScene으로 전환해 로딩 화면이 스킵되던 버그.
+        float deadline = Time.realtimeSinceStartup + 0.5f;
+        while (Time.realtimeSinceStartup < deadline)
+        {
+            var nm = Unity.Netcode.NetworkManager.Singleton;
+            if (nm == null || !nm.IsListening) break;
+            await System.Threading.Tasks.Task.Yield();
+        }
         LoadScene("LobbyScene");
     }
 }

@@ -85,6 +85,13 @@ public class PlayerNetworkSync : NetworkBehaviour
     public readonly NetworkVariable<int> NetworkJob = new(
         -1, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
+    // [머리위 UI] 직업/상성/등급을 모든 클라이언트에 동기화하기 위한 NetworkVariable.
+    // 각 캐릭터 위에 직업·상성·등급을 표시하기 위해 사용 (PlayerWorldUI 가 구독).
+    public readonly NetworkVariable<int> NetworkAffinity = new(
+        -1, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    public readonly NetworkVariable<int> NetworkGrade = new(
+        -1, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
     public readonly NetworkVariable<Vector2> NetworkMoveDir = new(
         Vector2.zero,
         NetworkVariableReadPermission.Everyone,
@@ -114,6 +121,10 @@ public class PlayerNetworkSync : NetworkBehaviour
     private bool _isProcessingRevive = false;
     private CancellationTokenSource _reviveCts = null;
     private Coroutine _regenCoroutine = null;
+    // BUG-02: SubmitCharacterDataServerRpc isFirstSpawn 판정용 플래그.
+    // NetworkHp.Value == 100f 비교 방식은 maxHp가 우연히 100이 나오는 캐릭터(예: baseHp=40 * 1.5 * 1.666)에서
+    // 게임 중 리롤 시 HP가 만피로 강제 리셋되는 버그가 있어 명시적 플래그로 대체.
+    private bool _hasSubmittedCharacterData = false;
 
     public CharacterData ServerData  => _serverData;
     // [버그 수정] ServerValidator.BanAndKickAsync가 정확한 userId를 참조할 수 있도록 공개
@@ -296,6 +307,9 @@ public class PlayerNetworkSync : NetworkBehaviour
             return;
         }
         _serverData = netData.ToCharacterData();
+        // H-5: 리롤로 같은 ActiveSkillType이 재배정됐을 때 이전 매치/세션의 쿨다운 타임스탬프가
+        // _skillLastUsed에 잔존하여 새 캐릭터의 동일 스킬을 즉시 사용 못 하던 버그.
+        _skillLastUsed.Clear();
         // [Fix #1] 닉네임을 RPC 파라미터로 직접 수신.
         // NetworkVariable 동기화보다 RPC가 먼저 도달하는 타이밍 버그를 해결하며,
         // 서버에서 NetworkNickname을 설정하므로 클라이언트 위변조도 차단합니다.
@@ -308,9 +322,12 @@ public class PlayerNetworkSync : NetworkBehaviour
         _controller.SetMyData(_serverData);
         NetworkNickname.Value  = nickname;
         // NEW-02: 리롤 재제출 시 전투 중인 플레이어의 HP가 만피로 강제 리셋되는 버그 수정.
-        // 최초 스폰(NetworkHp가 기본 100f) 또는 게임 시작 전에는 만피 초기화,
+        // 최초 스폰 또는 게임 시작 전에는 만피 초기화,
         // 게임 진행 중 리롤은 기존 HP 비율을 유지하면서 MaxHp만 갱신.
-        bool isFirstSpawn = Mathf.Approximately(NetworkHp.Value, 100f);
+        // BUG-02: NetworkHp == 100f 비교는 캐릭터 maxHp가 우연히 100인 경우 false-positive로
+        // 진행 중인 플레이어의 HP를 만피로 리셋하는 버그가 있어 명시적 플래그로 변경.
+        bool isFirstSpawn = !_hasSubmittedCharacterData;
+        _hasSubmittedCharacterData = true;
         bool gameActive   = InGameManager.Instance != null && InGameManager.Instance.isGameActive;
         if (isFirstSpawn || !gameActive)
         {
@@ -326,6 +343,9 @@ public class PlayerNetworkSync : NetworkBehaviour
         // [외형 동기화] 검증된 직업을 모든 클라이언트에 브로드캐스트.
         // PlayerController.OnJobValueChanged 가 수신하여 UpdateVisualByJob 호출.
         NetworkJob.Value       = (int)_serverData.job;
+        // [머리위 UI] 상성·등급도 함께 브로드캐스트하여 PlayerWorldUI가 모든 클라이언트에서 표시.
+        NetworkAffinity.Value  = (int)_serverData.affinity;
+        NetworkGrade.Value     = (int)_serverData.grade;
 
         // [FIX] Regeneration 패시브 NetworkHp 미갱신 버그 수정.
         // CombatSystem.RegenerationRoutine은 data.currentHp만 수정하고 NetworkHp.Value를 갱신하지 않아
@@ -337,10 +357,15 @@ public class PlayerNetworkSync : NetworkBehaviour
 
     private System.Collections.IEnumerator RegenerationNetworkRoutine()
     {
-        var wait = new WaitForSeconds(2f);
+        // BUG-23: 기존엔 interval/cooldown/rate/min을 모두 하드코딩하여 GameBalanceConfig 변경이
+        // 실제 네트워크 게임 재생 패시브에 반영되지 않음 (출시 후 밸런스 패치 불가).
+        // Config가 없으면 기존 기본값 유지.
         while (true)
         {
-            yield return wait;
+            var cfg = GameBalanceConfig.Get();
+            float interval  = cfg != null ? cfg.RegenerationTickInterval : 2f;
+            yield return new WaitForSeconds(interval);
+
             // [버그 수정] yield break → continue 로 변경.
             // 기존: 사망 시 yield break → 코루틴 영구 종료.
             //        부활(ReportReviveTicketResultServerRpc)로 NetworkIsDead.Value가
@@ -349,9 +374,13 @@ public class PlayerNetworkSync : NetworkBehaviour
             //        OnNetworkDespawn 시 코루틴은 Unity가 자동 정리하므로 무한루프 문제 없음.
             if (NetworkIsDead.Value) continue;
             if (_serverData == null || !_serverData.HasPassive(PassiveSkillType.Regeneration)) continue;
-            if (Time.time - _serverData.lastCombatTime >= 4f && NetworkHp.Value < NetworkMaxHp.Value)
+
+            float cooldown  = cfg != null ? cfg.RegenerationCooldown : 4f;
+            float regenRate = cfg != null ? cfg.RegenerationHpRate   : 0.05f;
+            float regenMin  = cfg != null ? cfg.RegenerationMin      : 1.5f;
+            if (Time.time - _serverData.lastCombatTime >= cooldown && NetworkHp.Value < NetworkMaxHp.Value)
             {
-                float amount = Mathf.Max(1.5f, NetworkMaxHp.Value * 0.05f);
+                float amount = Mathf.Max(regenMin, NetworkMaxHp.Value * regenRate);
                 // HealServer: NetworkHp.Value + _serverData.currentHp 동시 갱신 → 클라이언트 전파
                 _controller.HealServer(amount);
             }
@@ -522,7 +551,9 @@ public class PlayerNetworkSync : NetworkBehaviour
         var mgr = InGameManager.Instance;
         if (mgr == null) return false;
         if (target._hasUsedRevive) return false;
-        if (mgr.ElapsedGameTime > 60f) return false;
+        // BUG-24: ReviveTimeLimit를 GameBalanceConfig에서 읽어 InGameHUD UI 표시와 동기화.
+        float reviveLimit = GameBalanceConfig.Get()?.ReviveTimeLimit ?? 60f;
+        if (mgr.ElapsedGameTime > reviveLimit) return false;
         // [FIX] AliveCount 타이밍 버그 + 조건식 오류 수정.
         // CanOfferRevive는 ProcessDeath에서 FinalizeDeath(→ OnPlayerDied → alivePlayers.Remove)
         // 보다 먼저 호출되므로 사망자가 아직 AliveCount에 포함된 상태.
@@ -541,7 +572,8 @@ public class PlayerNetworkSync : NetworkBehaviour
         var mgr = InGameManager.Instance;
         if (mgr == null) return "InGameManager 없음";
         if (target._hasUsedRevive)                                         return "이미 부활권 사용함";
-        if (mgr.ElapsedGameTime > 60f)                                     return $"시간 초과 ({mgr.ElapsedGameTime:0}초)";
+        float reviveLimitMsg = GameBalanceConfig.Get()?.ReviveTimeLimit ?? 60f;
+        if (mgr.ElapsedGameTime > reviveLimitMsg)                          return $"시간 초과 ({mgr.ElapsedGameTime:0}초 / 제한 {reviveLimitMsg:0}초)";
         if (mgr.AliveCount < 3)                                            return $"생존자 {mgr.AliveCount - 1}명 (부활 후 최소 2명 필요)";
         if (mgr.MatchReviveUsedCount >= InGameManager.MaxMatchReviveCount) return $"매치 부활 횟수 소진 ({mgr.MatchReviveUsedCount}/{InGameManager.MaxMatchReviveCount})";
         return "알 수 없음";
@@ -563,9 +595,18 @@ public class PlayerNetworkSync : NetworkBehaviour
         string victimName = target.NetworkNickname.Value.ToString();
         if (killer != target)
         {
-            killer.NetworkKillCount.Value++;
-            string killerName = killer.NetworkNickname.Value.ToString();
-            BroadcastKillFeedClientRpc(killerName, victimName);
+            // BUG-03: killer가 Despawn(연결 끊김)된 상태에서 NetworkVariable 접근 시 NGO 예외 발생.
+            // Thorns/DoT 등 지연 데미지로 가해자가 떠난 뒤 사망이 처리될 때 보호.
+            if (killer != null && killer.IsSpawned)
+            {
+                killer.NetworkKillCount.Value++;
+                string killerName = killer.NetworkNickname.Value.ToString();
+                BroadcastKillFeedClientRpc(killerName, victimName);
+            }
+            else
+            {
+                BroadcastKillFeedClientRpc("[연결끊김]", victimName);
+            }
         }
         else
         {
@@ -581,6 +622,14 @@ public class PlayerNetworkSync : NetworkBehaviour
     private void BroadcastKillFeedClientRpc(string attackerName, string victimName)
     {
         InGameHUD.Instance?.ShowKillFeed(attackerName, victimName);
+    }
+
+    // H-8: 서버 측 MatchReviveUsedCount 변경을 모든 클라이언트에 동기화.
+    [ClientRpc]
+    private void SyncMatchReviveCountClientRpc(int usedCount)
+    {
+        if (InGameManager.Instance != null)
+            InGameManager.Instance.SetMatchReviveUsedCount(usedCount);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -606,14 +655,16 @@ public class PlayerNetworkSync : NetworkBehaviour
         }
 
         // 5.5초가 지나도록 플레이어가 아무것도 안 한 경우
-        // _hasUsedRevive 재확인: RequestReviveServerRpc가 동시 진입했을 가능성 방어
-        if (!_hasUsedRevive && !_isProcessingRevive)
-        {
-            _hasUsedRevive = true;
-            // [버그 수정 X-B] 순서 변경 — ReviveDeniedClientRpc 먼저(UI 닫고), 그 후 FinalizeDeath.
-            ReviveDeniedClientRpc();
-            FinalizeDeath(this);
-        }
+        // C-2: 기존 `!_hasUsedRevive && !_isProcessingRevive` 체크는 atomic 하지 않아
+        // ReportReviveTicketResultServerRpc가 거의 동시에 도달하면 양쪽 모두 통과 → FinalizeDeath 2회 호출.
+        // _isProcessingRevive 상태(Supabase 응답 대기)면 무조건 양보하여 한 경로만 사망 확정 처리.
+        if (_hasUsedRevive || _isProcessingRevive) return;
+        // BUG-01: Despawn(연결 끊김 등) 이후 ClientRpc / NetworkVariable 접근 시 NGO 예외 방지.
+        if (!IsSpawned) return;
+        _hasUsedRevive = true;
+        // [버그 수정 X-B] 순서 변경 — ReviveDeniedClientRpc 먼저(UI 닫고), 그 후 FinalizeDeath.
+        ReviveDeniedClientRpc();
+        FinalizeDeath(this);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -764,6 +815,11 @@ public class PlayerNetworkSync : NetworkBehaviour
         _serverData.tenacityUsed = false; // 부활 시 즉사 방지 1회 기회 복구
 
         InGameManager.Instance?.OnReviveTicketUsed();
+        // H-8: InGameManager는 NetworkBehaviour가 아니므로 MatchReviveUsedCount가 서버에만 갱신되어
+        // 클라이언트 InGameHUD가 항상 "매치 잔여: 3/3" 으로 잘못 표시되던 버그.
+        // PlayerNetworkSync ClientRpc로 모든 클라이언트에 브로드캐스트하여 InGameManager에 반영.
+        int newUsedCount = InGameManager.Instance?.MatchReviveUsedCount ?? 0;
+        SyncMatchReviveCountClientRpc(newUsedCount);
         InGameManager.Instance?.OnPlayerRevived(_controller);
 
         // [버그 수정] 부활 위치를 서버에서 결정하여 모든 클라이언트가 동일 위치를 보도록 전달.
@@ -932,7 +988,10 @@ public class PlayerNetworkSync : NetworkBehaviour
         if (_controller.StatusFX != null && _serverData.shieldHp > 0f)
         {
             damage = _controller.StatusFX.AbsorbWithShield(damage);
-            result = new DamageResult { finalDamage = damage, isShielded = true };
+            // HIGH-02: 새 DamageResult 생성으로 isCritical / isLuckyStrike / isWorldCollapse 등의 플래그가
+            // 소실되어 클라이언트 팝업이 일반 데미지로 잘못 표시되던 버그. 기존 result를 유지하면서 필요한 필드만 갱신.
+            result.finalDamage = damage;
+            result.isShielded  = true;
             if (damage <= 0f)
             {
                 NotifyHitClientRpc(result);

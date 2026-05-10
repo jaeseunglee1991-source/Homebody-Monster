@@ -131,18 +131,31 @@ public class DailyRewardSystem : MonoBehaviour
     /// LobbyUIController.Start() 맨 아래에 추가:
     ///   DailyRewardSystem.Instance?.TryClaimOnLobbyEnter();
     /// </summary>
-    public void TryClaimOnLobbyEnter()
+    public async void TryClaimOnLobbyEnter()
     {
         if (AlreadyClaimedTodayLocally())
         {
             Debug.Log("[DailyReward] 오늘 이미 수령 완료 (로컬 캐시).");
             return;
         }
-        _ = ShowPanelAsync();
+        // H-4: `_ = ShowPanelAsync()` 패턴은 Task 예외(Supabase 오류 등)가 완전히 무음 처리되어
+        // 출석 보상 실패 원인 추적이 불가능했음. async void + try/catch로 로깅 보장.
+        try { await ShowPanelAsync(); }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"[DailyReward] TryClaimOnLobbyEnter 예외: {e.Message}");
+        }
     }
 
     /// <summary>출석 버튼 등에서 수동으로 패널을 엽니다.</summary>
-    public void OpenPanel() => _ = ShowPanelAsync();
+    public async void OpenPanel()
+    {
+        try { await ShowPanelAsync(); }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"[DailyReward] OpenPanel 예외: {e.Message}");
+        }
+    }
 
     public void ClosePanel()
     {
@@ -215,7 +228,9 @@ public class DailyRewardSystem : MonoBehaviour
         finally
         {
             // [Bug Fix #7] 정상 완료·예외·return 어느 경로에서도 반드시 해제
-            if (this != null) _isShowingPanel = false;
+            // BUG-13: this==null 가드 제거 — 파괴된 MonoBehaviour의 필드 접근은 Unity에서 허용되며,
+            // 동일 씬에서 비동기 완료 전 패널이 destroy/recreated 사이클을 도는 경우 영구 잠김 방지.
+            _isShowingPanel = false;
         }
     }
 
@@ -326,7 +341,9 @@ public class DailyRewardSystem : MonoBehaviour
         int normalizedStreak = streak > 0 ? ((streak - 1) % 7) + 1 : 1;
         int todayIndex = Mathf.Clamp(normalizedStreak - 1, 0, 6);
 
-        for (int i = 0; i < daySlots.Length && i < 7; i++)
+        // BUG-15: PizzaRewardTable.Length로 동적 상한 — 향후 보상 일수 변경 시 IndexOutOfRange 방지.
+        int maxSlots = Mathf.Min(daySlots.Length, PizzaRewardTable.Length);
+        for (int i = 0; i < maxSlots; i++)
         {
             if (daySlots[i] == null) continue;
 

@@ -145,7 +145,14 @@ public class ReconnectManager : MonoBehaviour
             {
                 // [NEW-04] Shutdown으로 사라진 NGO 콜백을 재구독한 뒤 StartClient 호출
                 AppNetworkManager.Instance.ResubscribeNetworkCallbacks();
-                AppNetworkManager.Instance.ConnectToGameServer(_lastIp, _lastPort);
+                // H-3: ConnectToGameServer가 false 반환 시 NGO 내부 상태 불일치로 다음 재시도가 망가지므로
+                // IsConnectedClient 폴링 없이 즉시 다음 시도로 진행 (대기 시간 절약).
+                bool ok = AppNetworkManager.Instance.ConnectToGameServer(_lastIp, _lastPort);
+                if (!ok)
+                {
+                    Debug.LogWarning($"[ReconnectManager] StartClient 실패 ({attempt}/{maxRetries}) — 다음 시도");
+                    continue;
+                }
             }
 
             // retryInterval 동안 접속 성공 여부 체크

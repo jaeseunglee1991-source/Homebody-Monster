@@ -101,8 +101,10 @@ public class InGameManager : MonoBehaviour
         var netMgr = Unity.Netcode.NetworkManager.Singleton;
         
         // [FIX] IsListening 조건 제거: 씬 로드 타이밍에 따라 IsListening이 false일 때 클라이언트가 서버 코루틴을 실행하는 버그 방지
-        if (netMgr != null && !netMgr.IsServer) return;
-        
+        // BUG-08: NetworkManager.Singleton == null인 경우(씬 로드 타이밍이 NGO 초기화보다 빠를 때)에도
+        // 서버 전용 GameStartSequence가 클라이언트에서 실행되는 것을 차단.
+        if (netMgr == null || !netMgr.IsServer) return;
+
         StartCoroutine(GameStartSequence());
     }
 
@@ -253,6 +255,15 @@ public class InGameManager : MonoBehaviour
     {
         MatchReviveUsedCount++;
         Debug.Log($"[InGameManager] 매치 부활권 사용: {MatchReviveUsedCount}/{MaxMatchReviveCount}");
+    }
+
+    /// <summary>
+    /// H-8: PlayerNetworkSync.SyncMatchReviveCountClientRpc 수신 시 호출.
+    /// 클라이언트 측 MatchReviveUsedCount를 서버 값과 일치시킨다.
+    /// </summary>
+    public void SetMatchReviveUsedCount(int count)
+    {
+        MatchReviveUsedCount = count;
     }
 
     public void OnPlayerDisconnected(PlayerController disconnectedPlayer)
@@ -546,13 +557,19 @@ public class InGameManager : MonoBehaviour
         //   → ClientRpc로 각 Owner 클라이언트에게 전달, 수신 측에서 GameManager 저장 + Supabase 저장
         // • listen-server: 호스트도 ClientRpc 수신 → 동일 경로로 처리
         // BUG-02: NetworkSpawnManager.Instance null 시 빈 배열 폴백 대신 씬 전체 탐색.
-        var allSyncs = NetworkSpawnManager.Instance != null
-            ? NetworkSpawnManager.Instance.GetAllPlayers()
+        // M-1: NetworkSpawnManager._allSpawnedPlayers는 SpawnPlayer() 경유 스폰에서만 등록.
+        // 에디터 직접 실행 등 우회 시 GetAllPlayers()가 빈 컬렉션 반환 → ResultScene 미전환.
+        // GetAllPlayers().Count == 0 도 폴백 트리거에 포함.
+        var spawnMgrPlayers = NetworkSpawnManager.Instance?.GetAllPlayers();
+        var allSyncs = (spawnMgrPlayers != null && spawnMgrPlayers.Count > 0)
+            ? spawnMgrPlayers
             : (System.Collections.Generic.IReadOnlyCollection<PlayerNetworkSync>)
               FindObjectsByType<PlayerNetworkSync>(FindObjectsSortMode.None);
         foreach (var sync in allSyncs)
         {
-            if (sync == null) continue;
+            // BUG-21: 게임 종료 직전 연결 끊김으로 Despawn된 NetworkBehaviour의 NetworkVariable/ClientRpc 접근은
+            // NGO 내부에서 예외 발생. null 체크만으론 Despawn 상태를 잡을 수 없어 IsSpawned 별도 검사 필요.
+            if (sync == null || !sync.IsSpawned) continue;
             var p = sync.GetComponent<PlayerController>();
             if (p == null) continue;
 
@@ -588,8 +605,10 @@ public class InGameManager : MonoBehaviour
         // NotifyMatchResultClientRpc 수신 측에서 _ = SaveMatchResultAsync()를 실행하지만
         // 서버가 즉시 LoadScene을 호출하면 PlayerNetworkSync(destroyWithScene:true)가
         // Destroy되면서 진행 중인 Task가 고아가 되어 DB 저장이 완료되지 않음.
-        // → Supabase 네트워크 왕복 충분히 대기 후 씬 전환 (3초로 증가, BUG-03).
-        yield return new WaitForSeconds(3f);
+        // → Supabase 네트워크 왕복 충분히 대기 후 씬 전환.
+        // C-3: 모바일 200ms+ RTT 환경에서 save_match_result RPC 왕복이 3초를 초과해 결과 저장이 누락되던 버그.
+        // 서버는 클라이언트 측 Task를 직접 폴링할 수 없으므로 보수적으로 대기 시간 5초로 상향.
+        yield return new WaitForSeconds(5f);
 
         // ── NGO SceneManager로 전체 씬 전환 ────────────────────────
         // [버그 수정 X-A] netMgr이 없거나 SceneManager.LoadScene이 실패하면

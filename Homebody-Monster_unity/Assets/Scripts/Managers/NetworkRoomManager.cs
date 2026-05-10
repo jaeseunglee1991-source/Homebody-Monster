@@ -257,16 +257,37 @@ public class NetworkRoomManager : MonoBehaviour
     //  준비
     // ════════════════════════════════════════════════════════════
 
+    private bool _readyRpcInFlight = false;
     private async void OnClickReady()
     {
         // [버그 수정] _currentRoomId가 null/empty인 상태에서 SetMemberReady 호출 방지.
         if (string.IsNullOrEmpty(_currentRoomId)) return;
+        // #5: 빠르게 연타 시 RPC가 동시에 다중 발사되어 _isReady와 DB 상태가 어긋나던 버그.
+        if (_readyRpcInFlight) return;
+        _readyRpcInFlight = true;
 
         _isReady = !_isReady;
         if (readyButtonText != null)
             readyButtonText.text = _isReady ? "✅ 준비 완료" : "준비";
+        if (readyButton != null) readyButton.interactable = false;
 
-        await SupabaseManager.Instance.SetMemberReady(_currentRoomId, _isReady);
+        try
+        {
+            await SupabaseManager.Instance.SetMemberReady(_currentRoomId, _isReady);
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"[Room] SetMemberReady 오류: {e.Message}");
+            // RPC 실패 시 로컬 토글을 되돌려 DB와 일치 유지
+            _isReady = !_isReady;
+            if (readyButtonText != null)
+                readyButtonText.text = _isReady ? "✅ 준비 완료" : "준비";
+        }
+        finally
+        {
+            _readyRpcInFlight = false;
+            if (readyButton != null) readyButton.interactable = true;
+        }
     }
 
     // ════════════════════════════════════════════════════════════
@@ -316,6 +337,8 @@ public class NetworkRoomManager : MonoBehaviour
             ShowStatus("게임 시작에 실패했습니다. 다시 시도해주세요.");
             Debug.LogError("[Room] start_private_room RPC 실패");
             _isConnecting = false;
+            // A-24: 실패 후 startButton.interactable이 복구되지 않아 방장이 재시도하려면 방을 다시 열어야 했던 UX 버그.
+            if (startButton != null) startButton.interactable = _members.Count >= 2;
             return;
         }
 
@@ -491,7 +514,10 @@ public class NetworkRoomManager : MonoBehaviour
 
     private void ConnectToGameServer(string ip, ushort port)
     {
-        if (_isConnecting) return;
+        // CRITICAL-02: OnClickStartMatch가 _isConnecting=true로 선점한 상태에서 ConnectToGameServer가
+        // 다시 동일 플래그로 early return하여 방장이 시작 버튼을 눌러도 게임 서버에 절대 접속 못 하던 버그.
+        // 비-호스트 경로(ParseAndConnect)는 호출 측에서 _isConnecting을 검증하지만 본인이 직접 set하지 않으므로
+        // 여기서 idempotent하게 set만 수행 (재진입 자체는 outer 호출자/UI 흐름에서 차단).
         _isConnecting = true;
 
         UnsubscribeAll();

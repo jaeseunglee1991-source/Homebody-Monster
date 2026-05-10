@@ -179,8 +179,18 @@ public class AudioManager : MonoBehaviour
         volume = Mathf.Clamp01(volume);
         // BUG-07: 활성 소스만 갱신하면 페이드 후 비활성 소스의 volume이 0으로 고정되어
         // 다음 BGM 전환 시 무음이 됨. 두 소스 모두 갱신해야 안전.
-        if (_bgmA != null) _bgmA.volume = volume;
-        if (_bgmB != null) _bgmB.volume = volume;
+        // L-3: 단, 크로스페이드 진행 중에는 두 소스를 동시에 같은 값으로 올리면 일순간 BGM 중첩 발생.
+        // 페이드 중이면 활성(페이드인 타겟) 소스만 갱신, 비활성(페이드아웃) 소스는 코루틴이 0으로 수렴시키도록 둠.
+        if (_fadeCoroutine == null)
+        {
+            if (_bgmA != null) _bgmA.volume = volume;
+            if (_bgmB != null) _bgmB.volume = volume;
+        }
+        else
+        {
+            var active = ActiveBGM();
+            if (active != null) active.volume = volume;
+        }
     }
 
     public void SetSfxVolume(float volume)

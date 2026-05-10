@@ -114,6 +114,19 @@ public class AuthManager : MonoBehaviour
         {
             // [NEW-03] 저장된 세션 복원을 먼저 시도. SignInAnonymously는 매번 새 익명 계정을
             // 생성하므로, 복원이 가능하면 기존 닉네임/전적/피자/부활권 데이터를 보존해야 한다.
+            // A-21: 기존엔 RetrieveSessionAsync 예외(네트워크 일시 단절 등) 시 곧바로 SignInAnonymously로
+            // 새 계정을 만들어 사용자의 피자/부활권/전적/닉네임이 모두 유실되던 데이터 손실 버그.
+            // 저장된 세션 키가 존재하는데 복원만 실패한 경우는 "신규 가입"이 아니라 "오류"로 처리.
+            bool hadStoredSession = false;
+            try
+            {
+                // Supabase Unity SDK는 PlayerPrefs에 세션을 저장. 키는 SDK 기본값("supabase.gotrue.session").
+                // 저장된 토큰이 비어있지 않으면 "신규 사용자"가 아닌 "복원 대상"으로 판정.
+                hadStoredSession = PlayerPrefs.HasKey("supabase.gotrue.session")
+                                   && !string.IsNullOrEmpty(PlayerPrefs.GetString("supabase.gotrue.session", ""));
+            }
+            catch { /* PlayerPrefs 접근 불가 시 안전하게 false */ }
+
             try
             {
                 var restored = await SupabaseManager.Instance.Client.Auth.RetrieveSessionAsync();
@@ -126,7 +139,15 @@ public class AuthManager : MonoBehaviour
             }
             catch (System.Exception restoreEx)
             {
-                Debug.Log($"[Auth] 세션 복원 실패 → 신규 게스트 계정 생성으로 진행: {restoreEx.Message}");
+                Debug.LogWarning($"[Auth] 세션 복원 실패: {restoreEx.Message}");
+                if (hadStoredSession)
+                {
+                    // A-21: 저장된 세션이 있는데 복원만 실패 → 새 계정 생성 금지(데이터 보존).
+                    SetBusy(false, preserveError: true);
+                    ShowError("기존 계정을 불러오지 못했습니다. 네트워크를 확인하고 다시 시도해주세요.");
+                    return;
+                }
+                // 저장 세션 자체가 없으면 정상적인 "신규 가입" 흐름으로 진행.
             }
 
             var task = SupabaseManager.Instance.Client.Auth.SignInAnonymously();
@@ -224,10 +245,15 @@ public class AuthManager : MonoBehaviour
 
             if (profile == null)
             {
-                Debug.LogError("[Auth] Profile is null after GetProfile");
-                ShowError("프로필을 불러오지 못했습니다. 다시 시도해주세요.");
-                SetPanelState(loading: false);
-                SetBusy(false, preserveError: true); // H-17
+                // BUG-09: 신규 가입 직후 on_auth_user_created 트리거 지연으로 GetProfile이 null 반환 시
+                // 기존엔 에러만 표시하고 어떤 패널도 활성화되지 않아 앱 재시작 외 복구 경로가 없었음.
+                // 닉네임 패널로 폴백하여 SubmitNickname 흐름이 upsert로 신규 행을 생성하도록 함.
+                // H-6: SetPanelState/ShowNicknamePanel 등 패널 전환 함수가 내부에서 ClearError를 호출하므로
+                // ShowError를 마지막에 두지 않으면 사용자에게 에러 메시지가 보이지 않음.
+                Debug.LogWarning("[Auth] Profile is null after GetProfile → 닉네임 패널로 폴백");
+                SetBusy(false, preserveError: true);
+                ShowNicknamePanel();
+                ShowError("프로필 생성 중입니다. 닉네임을 설정해주세요.");
                 return;
             }
 
@@ -251,10 +277,11 @@ public class AuthManager : MonoBehaviour
         }
         catch (System.Exception e)
         {
+            // H-6: SetPanelState가 내부에서 ClearError를 호출하므로 ShowError를 마지막에 둠.
             Debug.LogError($"[Auth] CheckUserFlow error: {e.Message}");
-            ShowError("데이터 확인 중 오류가 발생했습니다.");
             SetPanelState(loading: false);
             SetBusy(false, preserveError: true); // H-17
+            ShowError("데이터 확인 중 오류가 발생했습니다.");
         }
     }
 
@@ -287,10 +314,23 @@ public class AuthManager : MonoBehaviour
             return;
         }
 
-        // 금칙어 체크 (공통 ForbiddenWords.List 사용)
+        // 금칙어 체크
+        // L-5: 닉네임은 정확 일치 비교(NicknameExactBlockList)로 "Masterpiece"·"Administrator" 등 정상 닉네임 차단을 막고,
+        // 욕설(`List`)은 부분 문자열로 회피 어렵게 유지.
         string lowerName = newName.ToLower();
+        foreach (string word in ForbiddenWords.NicknameExactBlockList)
+        {
+            if (lowerName == word.ToLower())
+            {
+                ShowError("사용할 수 없는 닉네임입니다.");
+                return;
+            }
+        }
         foreach (string word in ForbiddenWords.List)
         {
+            // 한글/영문 욕설은 길이가 충분하므로 Contains 유지 (회피 방지)
+            // 단, 영문 일반어 충돌 위험이 큰 짧은 단어는 NicknameExactBlockList로 분리됨.
+            if (word.Length < 4) continue; // admin/gm/master/system/fuck 등은 위에서 정확 일치만 차단
             if (lowerName.Contains(word.ToLower()))
             {
                 ShowError("사용할 수 없는 닉네임입니다.");

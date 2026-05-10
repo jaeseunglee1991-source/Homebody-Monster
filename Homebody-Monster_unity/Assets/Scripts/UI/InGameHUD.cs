@@ -370,7 +370,9 @@ public class InGameHUD : MonoBehaviour
         if (mgr == null) { reviveInfoText.text = ""; return; }
 
         int remaining      = InGameManager.MaxMatchReviveCount - mgr.MatchReviveUsedCount;
-        float timeLeft     = Mathf.Max(0f, 60f - mgr.ElapsedGameTime);
+        // BUG-24: 60f 하드코딩 시 GameBalanceConfig.ReviveTimeLimit과 서버 판정(CanOfferRevive)이 불일치.
+        float reviveLimit  = GameBalanceConfig.Get()?.ReviveTimeLimit ?? 60f;
+        float timeLeft     = Mathf.Max(0f, reviveLimit - mgr.ElapsedGameTime);
         int survivors      = mgr.AliveCount;
 
         // Supabase에서 캐시된 보유 티켓 수량
@@ -401,7 +403,7 @@ public class InGameHUD : MonoBehaviour
         }
         else if (timeLeft <= 0f)
         {
-            reviveInfoText.text = "게임 시작 60초가 지나 부활권을 사용할 수 없습니다.";
+            reviveInfoText.text = $"게임 시작 {reviveLimit:0}초가 지나 부활권을 사용할 수 없습니다.";
         }
         else if (survivors < 3)
         {
@@ -434,7 +436,13 @@ public class InGameHUD : MonoBehaviour
             if (reviveTimerText != null)
                 reviveTimerText.text = Mathf.CeilToInt(timer).ToString();
 
-            refreshAccum += Time.deltaTime;
+            // A-23: Time.deltaTime은 timeScale=0 일시정지 시 멈추고, 앱 백그라운드 복귀 시
+            // 첫 프레임 deltaTime이 매우 커져 타이머가 즉시 만료될 수 있음.
+            // 부활 카운트다운은 실시간 기반이어야 하므로 unscaledDeltaTime 사용.
+            float dt = Time.unscaledDeltaTime;
+            // 너무 큰 dt(백그라운드 복귀 직후)는 서버와 desync 방지를 위해 0.1s로 클램프
+            if (dt > 0.1f) dt = 0.1f;
+            refreshAccum += dt;
             if (refreshAccum >= refreshInterval)
             {
                 refreshAccum = 0f;
@@ -442,7 +450,7 @@ public class InGameHUD : MonoBehaviour
             }
 
             yield return null;
-            timer -= Time.deltaTime;
+            timer -= dt;
         }
         // 5초 만료 → 서버 타임아웃 코루틴이 킬 처리, UI만 닫음
         HideReviveUI();
