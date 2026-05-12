@@ -135,6 +135,18 @@ public class MatchmakingUX : MonoBehaviour
     }
 
     /// <summary>
+    /// 외부(LobbyUIController 등)에서 매칭 취소/정리 시 호출.
+    /// MatchmakingManager.CancelSearch는 OnMatchFailed를 발화하지 않으므로
+    /// 사용자 취소 흐름에서 UX 패널을 명시적으로 정리하기 위한 진입점.
+    /// </summary>
+    public void StopMatchmakingUX()
+    {
+        if (_uxCoroutine != null) { StopCoroutine(_uxCoroutine); _uxCoroutine = null; }
+        _matchFound = false;
+        HideAll();
+    }
+
+    /// <summary>
     /// 매칭 실패 이벤트 핸들러 (MatchmakingManager.OnMatchmakingFailed).
     /// </summary>
     public void OnMatchFailed(string reason = "")

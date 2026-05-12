@@ -206,7 +206,12 @@ public class AudioManager : MonoBehaviour
 
     private void CrossFadeBGM(AudioClip newClip)
     {
+        // [AUD-G1] 테스트 단계(사운드 리소스 미구성) 및 매니저 중복 dedup 경로에서
+        // AudioSource 컴포넌트가 destroy된 fake-null 상태인 경우 .clip 접근만으로
+        // MissingReferenceException이 발생함. Unity Object의 fake-null 체크는
+        // `== null` 비교가 정상 처리하므로 그것으로 가드.
         AudioSource current = ActiveBGM();
+        if (current == null) return; // BGM 소스 미구성 → 무음 모드로 무시
         if (current.clip == newClip && current.isPlaying) return;
 
         if (_fadeCoroutine != null) StopCoroutine(_fadeCoroutine);
@@ -219,6 +224,13 @@ public class AudioManager : MonoBehaviour
         AudioSource fadeOut = ActiveBGM();
         AudioSource fadeIn  = InactiveBGM();
 
+        // [AUD-G1] 두 소스 중 하나라도 destroy 상태면 페이드 불가 → 안전 종료.
+        if (fadeOut == null || fadeIn == null)
+        {
+            _fadeCoroutine = null;
+            yield break;
+        }
+
         fadeIn.clip   = newClip;
         fadeIn.volume = 0f;
         if (newClip != null) fadeIn.Play();
@@ -230,16 +242,25 @@ public class AudioManager : MonoBehaviour
         {
             elapsed += Time.unscaledDeltaTime;
             float t = Mathf.Clamp01(elapsed / fadeDur);
+            // 코루틴 진행 중 컴포넌트가 destroy될 가능성 — 매 프레임 가드
+            if (fadeOut == null || fadeIn == null)
+            {
+                _fadeCoroutine = null;
+                yield break;
+            }
             fadeOut.volume = Mathf.Lerp(bgmVol, 0f, t);
             if (newClip != null)
                 fadeIn.volume = Mathf.Lerp(0f, bgmVol, t);
             yield return null;
         }
 
-        fadeOut.Stop();
-        fadeOut.clip   = null;
-        fadeOut.volume = 0f;
-        if (newClip != null) fadeIn.volume = bgmVol;
+        if (fadeOut != null)
+        {
+            fadeOut.Stop();
+            fadeOut.clip   = null;
+            fadeOut.volume = 0f;
+        }
+        if (fadeIn != null && newClip != null) fadeIn.volume = bgmVol;
 
         _bgmUsingA = !_bgmUsingA;
         _fadeCoroutine = null;
@@ -257,6 +278,7 @@ public class AudioManager : MonoBehaviour
         if (sfxVol <= 0f) return;
 
         AudioSource src = GetFreeSFXSource();
+        if (src == null) return; // [AUD-G1] SFX 풀 미구성/전부 destroyed → 무음 처리
         src.clip   = clip;
         src.volume = sfxVol;
         src.Play();
@@ -264,11 +286,14 @@ public class AudioManager : MonoBehaviour
 
     private AudioSource GetFreeSFXSource()
     {
+        // [AUD-G1] _sfxPool 자체가 null이거나 길이 0인 테스트 상태 방어
+        if (_sfxPool == null || _sfxPool.Length == 0) return null;
+
         foreach (var src in _sfxPool)
             if (src != null && !src.isPlaying) return src;
 
         _sfxPoolIndex = (_sfxPoolIndex + 1) % _sfxPool.Length;
-        return _sfxPool[_sfxPoolIndex];
+        return _sfxPool[_sfxPoolIndex]; // 여기서 null일 수도 있고, 호출 측에서 null 체크
     }
 
     // ════════════════════════════════════════════════════════════

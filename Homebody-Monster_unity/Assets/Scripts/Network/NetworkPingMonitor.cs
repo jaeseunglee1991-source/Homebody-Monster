@@ -147,7 +147,9 @@ public class NetworkPingMonitor : NetworkBehaviour
         base.OnNetworkDespawn();
     }
 
-    private void OnDestroy()
+    // [CS0114 수정] NetworkBehaviour.OnDestroy를 override + base 호출하지 않으면
+    // NGO가 NetworkObject 참조를 정리하지 못해 메모리 누수/스폰 관리 버그 발생 가능.
+    public override void OnDestroy()
     {
         _pingCts?.Cancel();
         _pingCts?.Dispose();
@@ -157,6 +159,8 @@ public class NetworkPingMonitor : NetworkBehaviour
         // SaveSessionPingAsync가 Supabase 응답을 완료할 때까지 보장해야 함.
         // 씬 전환 후 GC에 의해 자연 수거됨.
         if (Instance == this) Instance = null;
+
+        base.OnDestroy();
     }
 
     // ════════════════════════════════════════════════════════════

@@ -99,6 +99,7 @@ public class LobbySettingsPanel : MonoBehaviour
 
     private bool      _isOpen        = false;
     private bool      _isAnimating   = false;  // 애니메이션 진행 중 여부
+    private bool      _animOpening   = false;  // [Bug A] 현재 애니메이션이 열기인지(true)/닫기인지(false)
     private bool      _isLoggingOut  = false;  // 로그아웃 비동기 처리 중 여부
     private bool      _openAfterAnim = false;  // 닫기 애니메이션 완료 후 재열기 예약 플래그
     private Coroutine _animRoutine   = null;
@@ -116,6 +117,11 @@ public class LobbySettingsPanel : MonoBehaviour
         if (dimBackground      != null) dimBackground.SetActive(false);
         if (confirmLogoutPanel != null) confirmLogoutPanel.SetActive(false);
         if (confirmQuitPanel   != null) confirmQuitPanel.SetActive(false);
+
+        // [Bug B] 시작 시 저장된 마스터 볼륨을 AudioListener에 즉시 적용.
+        // BGM/SFX는 SettingsManager가 자체 복원하지만 마스터는 이 컴포넌트가 단독 관리하므로
+        // 여기서 한 번 반영하지 않으면 재시작 후 PlayerPrefs 값이 무시됨.
+        AudioListener.volume = PlayerPrefs.GetFloat(KEY_MASTER_VOLUME, 1f);
     }
 
     private void Start()
@@ -165,6 +171,10 @@ public class LobbySettingsPanel : MonoBehaviour
 
     public void OpenSettings()
     {
+        // [Bug C] 로그아웃 비동기 처리 중에는 재오픈 차단.
+        // ExecuteLogout이 CloseSettingsImmediate로 플래그를 풀어버려 await 동안 재오픈이 가능했음.
+        if (_isLoggingOut) return;
+
         // 이미 열려있으면 무시
         if (_isOpen) return;
 
@@ -195,8 +205,10 @@ public class LobbySettingsPanel : MonoBehaviour
     {
         if (!_isOpen) return;
 
-        // 닫기 애니메이션이 이미 진행 중이면 차단
-        if (_isAnimating && _animRoutine != null) return;
+        // [Bug A] 닫기 애니메이션이 이미 진행 중일 때만 차단.
+        // 기존 코드는 열기 애니메이션 중에도 닫기를 무시해 0.2초간 패널이 잠긴 것처럼 보였음.
+        // 열기 중 닫기 요청 시에는 코루틴을 끊고 닫기 애니메이션으로 즉시 전환.
+        if (_isAnimating && !_animOpening) return;
 
         // 확인 팝업이 열려있으면 먼저 닫기
         if (confirmLogoutPanel != null && confirmLogoutPanel.activeSelf)
@@ -398,16 +410,22 @@ public class LobbySettingsPanel : MonoBehaviour
     private IEnumerator AnimatePanel(bool opening)
     {
         _isAnimating = true;
+        _animOpening = opening;  // [Bug A] 현재 애니 방향 추적
         if (settingsPanel == null) { _isAnimating = false; yield break; }
 
         var cg = settingsPanel.GetComponent<CanvasGroup>();
         var rt = settingsPanel.GetComponent<RectTransform>();
 
+        // [Bug A] 진행 중 애니메이션을 끊고 반대 방향으로 전환할 때 현재 상태에서 부드럽게 이어지도록
+        // 시작값을 하드코딩하지 않고 현재 scale/alpha에서 출발.
+        float currentScale = rt != null ? rt.localScale.x : (opening ? 0.88f : 1f);
+        float currentAlpha = cg != null ? cg.alpha        : (opening ? 0f    : 1f);
+
         float elapsed   = 0f;
-        float fromScale = opening ? 0.88f : 1f;
-        float toScale   = opening ? 1f    : 0.88f;
-        float fromAlpha = opening ? 0f    : 1f;
-        float toAlpha   = opening ? 1f    : 0f;
+        float fromScale = currentScale;
+        float toScale   = opening ? 1f : 0.88f;
+        float fromAlpha = currentAlpha;
+        float toAlpha   = opening ? 1f : 0f;
 
         // [버그3 수정] 닫기 시작 즉시 raycasts 차단 → 애니메이션 중 클릭 이벤트 차단
         if (!opening && cg != null)

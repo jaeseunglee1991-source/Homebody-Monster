@@ -51,6 +51,11 @@ public class AuthManager : MonoBehaviour
         // AuthManager는 LoginScene 전용. 씬 전환 시 함께 파괴되도록 DontDestroyOnLoad 사용 안 함.
         if (Instance == null) { Instance = this; }
         else { Destroy(gameObject); return; }
+
+        // [A-22] 구글 로그인은 SignInWithGoogle 메서드가 아직 미구현(주석 처리)이므로
+        // 출시 빌드에서 사용자가 눌렀을 때 무반응 → "버그처럼 보이는" UX를 막기 위해 비활성화.
+        // GoogleSignInManager 도입 후 SignInWithGoogle을 해제하면 이 줄만 삭제하면 됨.
+        if (googleLoginButton != null) googleLoginButton.interactable = false;
     }
 
     private async void Start()
@@ -65,7 +70,29 @@ public class AuthManager : MonoBehaviour
 
     private async Task TryRestoreSession()
     {
-        if (SupabaseManager.Instance == null || !SupabaseManager.Instance.IsInitialized)
+        // [A-23] Supabase 초기화 레이스 컨디션 방어.
+        // SupabaseManager.Awake는 `async void` + `await Client.InitializeAsync()` 구조이므로,
+        // Unity는 첫 await에서 제어권을 반환하고 AuthManager.Start로 진입함. 결과적으로
+        // IsInitialized=false 상태에서 TryRestoreSession이 즉시 실행될 수 있고, 기존 코드는
+        // "서버 연결에 실패했습니다"를 잘못 표시하던 버그가 있었음. 최대 10초까지 폴링하여
+        // 초기화 완료를 기다리고, 정말 실패한 경우에만 에러 메시지를 표시.
+        if (SupabaseManager.Instance == null)
+        {
+            ShowError("서버 연결에 실패했습니다. 인터넷을 확인해주세요.");
+            SetPanelState(loading: false);
+            return;
+        }
+
+        const float initTimeoutSec = 10f;
+        float waited = 0f;
+        while (!SupabaseManager.Instance.IsInitialized && waited < initTimeoutSec)
+        {
+            await Task.Delay(100);
+            waited += 0.1f;
+            if (this == null) return; // 씬 전환 등으로 파괴된 경우
+        }
+
+        if (!SupabaseManager.Instance.IsInitialized)
         {
             ShowError("서버 연결에 실패했습니다. 인터넷을 확인해주세요.");
             SetPanelState(loading: false);
@@ -74,9 +101,25 @@ public class AuthManager : MonoBehaviour
 
         try
         {
-            // Supabase SDK가 저장된 refresh token으로 세션을 자동 복원함
-            var currentUser = SupabaseManager.Instance.Client.Auth.CurrentUser;
+            // [A-24] 자동 세션 복원 — 기존엔 CurrentUser만 읽었으나 SupabaseOptions에 SessionHandler가
+            // 지정되어 있지 않은 현 구성에서는 InitializeAsync 직후 CurrentUser가 항상 null이라
+            // "앱 재실행 시 로비 직행" 기능이 실제로 동작하지 않았음. RetrieveSessionAsync()를
+            // 명시적으로 호출해야 PlayerPrefs에 저장된 refresh token으로 세션이 복원됨.
+            // (SignInAsGuest 내부에서는 이미 같은 패턴을 사용 중 → API 호환성 검증됨)
+            Supabase.Gotrue.Session restored = null;
+            try
+            {
+                restored = await SupabaseManager.Instance.Client.Auth.RetrieveSessionAsync();
+            }
+            catch (System.Exception restoreEx)
+            {
+                // 저장된 세션이 없거나 만료된 경우 — 정상 흐름이므로 LogWarning 수준으로만 기록
+                Debug.Log($"[Auth] 저장된 세션 없음/만료: {restoreEx.Message}");
+            }
 
+            if (this == null) return;
+
+            var currentUser = restored?.User ?? SupabaseManager.Instance.Client.Auth.CurrentUser;
             if (currentUser != null)
             {
                 Debug.Log($"[Auth] 기존 세션 복원 성공: {currentUser.Id}");
@@ -86,7 +129,7 @@ public class AuthManager : MonoBehaviour
         }
         catch (System.Exception e)
         {
-            Debug.Log($"[Auth] 세션 없음, 로그인 화면 표시: {e.Message}");
+            Debug.Log($"[Auth] 세션 복원 중 예외: {e.Message}");
         }
 
         // 세션 없음 → 로그인 화면
@@ -120,10 +163,15 @@ public class AuthManager : MonoBehaviour
             bool hadStoredSession = false;
             try
             {
-                // Supabase Unity SDK는 PlayerPrefs에 세션을 저장. 키는 SDK 기본값("supabase.gotrue.session").
-                // 저장된 토큰이 비어있지 않으면 "신규 사용자"가 아닌 "복원 대상"으로 판정.
-                hadStoredSession = PlayerPrefs.HasKey("supabase.gotrue.session")
-                                   && !string.IsNullOrEmpty(PlayerPrefs.GetString("supabase.gotrue.session", ""));
+                // [SUPA-S1] PlayerPrefsSessionPersistence가 사용하는 키와 일치시킴.
+                // (이전엔 SDK 기본 키 "supabase.gotrue.session"을 검사했으나, 우리가 SessionHandler를
+                // 직접 구현하면서 키 이름을 "homebody.supabase.session.v1"로 변경했음.)
+                // 구버전 키도 함께 확인하여 기존 사용자 마이그레이션 안전망 제공.
+                const string newKey = "homebody.supabase.session.v1";
+                const string legacyKey = "supabase.gotrue.session";
+                hadStoredSession =
+                    (PlayerPrefs.HasKey(newKey)    && !string.IsNullOrEmpty(PlayerPrefs.GetString(newKey, ""))) ||
+                    (PlayerPrefs.HasKey(legacyKey) && !string.IsNullOrEmpty(PlayerPrefs.GetString(legacyKey, "")));
             }
             catch { /* PlayerPrefs 접근 불가 시 안전하게 false */ }
 
@@ -307,10 +355,10 @@ public class AuthManager : MonoBehaviour
                 ShowError("닉네임은 최소 2글자 이상이어야 합니다.");
             else if (newName.Length > 12)
                 ShowError("닉네임은 최대 12글자까지 가능합니다.");
-            else if (newName.Length >= 1 && char.IsDigit(newName[0]))
-                ShowError("닉네임은 숫자로 시작할 수 없습니다.");
+            else if (newName.Length >= 1 && (char.IsDigit(newName[0]) || newName[0] == '_'))
+                ShowError("닉네임은 한글 또는 영문으로 시작해야 합니다.");
             else
-                ShowError("닉네임은 한글, 영문, 숫자만 사용 가능합니다.");
+                ShowError("닉네임은 한글, 영문, 숫자, 밑줄(_)만 사용 가능합니다.");
             return;
         }
 

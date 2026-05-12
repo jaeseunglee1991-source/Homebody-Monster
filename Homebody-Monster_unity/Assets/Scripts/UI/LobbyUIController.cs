@@ -81,6 +81,28 @@ public class LobbyUIController : MonoBehaviour
 
     private void Start()
     {
+        // [SRV-G1] 데디케이티드 서버 모드 가드.
+        // 서버 인스턴스(MatchmakingManager.isDedicatedServerMode=true)는 로비에 "유령 플레이어"로
+        // 참여해서는 안 됨. 기존엔 서버도 ConnectToLobby/TrackLobbyPresence를 호출해서:
+        //   • 접속자 수에 자신이 포함됨 (1명짜리 클라가 "2명"으로 표시)
+        //   • 채팅 broadcast를 자기도 수신 → 페이로드 파싱 시도/실패
+        //   • Presence Track 경합 → 클라이언트와 카운트 불일치
+        // 서버는 MatchmakingManager.RunServerLoop만 돌면 충분하므로 로비 UI 전체를 비활성화하고
+        // 모든 이벤트 구독을 스킵.
+        bool isServerMode = MatchmakingManager.Instance != null
+                            && MatchmakingManager.Instance.isDedicatedServerMode;
+        if (isServerMode)
+        {
+            Debug.Log("[LobbyUI] 데디케이티드 서버 모드 — 로비 UI 비활성화");
+            if (lobbyPanel        != null) lobbyPanel.SetActive(false);
+            if (matchmakingPanel  != null) matchmakingPanel.SetActive(false);
+            if (exitConfirmPopup  != null) exitConfirmPopup.SetActive(false);
+            if (dimBackground     != null) dimBackground.SetActive(false);
+            // Update의 Escape 처리도 무의미하므로 이 컴포넌트 자체 비활성화
+            enabled = false;
+            return;
+        }
+
         // MatchmakingManager 값을 null 체크 후 안전하게 읽기
         if (MatchmakingManager.Instance != null)
         {
@@ -410,16 +432,19 @@ public class LobbyUIController : MonoBehaviour
         }
         if (startMatchButton != null) startMatchButton.interactable = false;
         ShowMatchmakingPanel();
+        // 고급 UX 패널(단계 메시지, 경과, 카운트다운) 동시 활성화
+        matchmakingUX?.StartMatchmakingUX();
         MatchmakingManager.Instance.StartSearch();
     }
 
     public void OnClickCancelMatch()
     {
         if (cancelMatchButton != null) cancelMatchButton.interactable = false;
+        // CancelSearch는 OnMatchFailed를 발화하지 않으므로 UX를 직접 정리.
+        matchmakingUX?.StopMatchmakingUX();
         if (MatchmakingManager.Instance != null)
             MatchmakingManager.Instance.CancelSearch();
-        else
-            ShowLobbyPanel();
+        ShowLobbyPanel();
     }
 
     public void OnClickSendChat()
@@ -476,6 +501,9 @@ public class LobbyUIController : MonoBehaviour
 
     private void HandleMatchmakingFailed()
     {
+        // MatchmakingUX는 OnMatchFailed에 자체 구독되어 안내 후 자동 HideAll하지만,
+        // 안전망으로 즉시 정리해 패널 잔류를 방지.
+        matchmakingUX?.StopMatchmakingUX();
         ShowLobbyPanel();
     }
 
