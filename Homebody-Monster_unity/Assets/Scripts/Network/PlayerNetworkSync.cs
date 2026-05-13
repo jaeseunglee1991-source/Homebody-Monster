@@ -6,24 +6,27 @@ using Unity.Netcode;
 using UnityEngine;
 
 // ════════════════════════════════════════════════════════════════
-//  NetworkCharacterData — 변경 없음
+//  NetworkCharacterData
+//  ※ NGO 직렬화는 필드 순서 의존. 한 번 출시된 후에는 중간 삽입 금지.
+//    AttackCooldown은 MoveSpeed 뒤·Active0 앞에 추가됨 (직업별 평타 쿨다운).
 // ════════════════════════════════════════════════════════════════
 public struct NetworkCharacterData : INetworkSerializable
 {
     public int   Job, Affinity, Grade;
-    public float MaxHp, BaseAtk, MoveSpeed;
+    public float MaxHp, BaseAtk, MoveSpeed, AttackCooldown;
     public int   Active0, Active1, Active2, Active3;
     public int   Passive0, Passive1, Passive2, Passive3;
 
     public void NetworkSerialize<T>(BufferSerializer<T> s) where T : IReaderWriter
     {
-        s.SerializeValue(ref Job);      s.SerializeValue(ref Affinity);
-        s.SerializeValue(ref Grade);    s.SerializeValue(ref MaxHp);
-        s.SerializeValue(ref BaseAtk);  s.SerializeValue(ref MoveSpeed);
-        s.SerializeValue(ref Active0);  s.SerializeValue(ref Active1);
-        s.SerializeValue(ref Active2);  s.SerializeValue(ref Active3);
-        s.SerializeValue(ref Passive0); s.SerializeValue(ref Passive1);
-        s.SerializeValue(ref Passive2); s.SerializeValue(ref Passive3);
+        s.SerializeValue(ref Job);            s.SerializeValue(ref Affinity);
+        s.SerializeValue(ref Grade);          s.SerializeValue(ref MaxHp);
+        s.SerializeValue(ref BaseAtk);        s.SerializeValue(ref MoveSpeed);
+        s.SerializeValue(ref AttackCooldown);
+        s.SerializeValue(ref Active0);        s.SerializeValue(ref Active1);
+        s.SerializeValue(ref Active2);        s.SerializeValue(ref Active3);
+        s.SerializeValue(ref Passive0);       s.SerializeValue(ref Passive1);
+        s.SerializeValue(ref Passive2);       s.SerializeValue(ref Passive3);
     }
 
     public CharacterData ToCharacterData()
@@ -32,6 +35,7 @@ public struct NetworkCharacterData : INetworkSerializable
         {
             job = (JobType)Job, affinity = (AffinityType)Affinity, grade = (GradeTier)Grade,
             maxHp = MaxHp, currentHp = MaxHp, baseAtk = BaseAtk, moveSpeed = MoveSpeed,
+            attackCooldown = AttackCooldown,
             activeSkills = new List<ActiveSkillType>(), passiveSkills = new List<PassiveSkillType>(),
         };
         int[] actives  = { Active0, Active1, Active2, Active3 };
@@ -414,6 +418,8 @@ public class PlayerNetworkSync : NetworkBehaviour
         if (d.MaxHp    < 5f   || d.MaxHp    > 160f) return false;
         if (d.BaseAtk  < 0.5f || d.BaseAtk  > 20f)  return false;
         if (d.MoveSpeed < 1f  || d.MoveSpeed > 6f)   return false;
+        // 직업별 최저 0.65f(Tanker) ~ 최고 1.20f(Mage) 범위. 여유로 0.5~1.5f 허용.
+        if (d.AttackCooldown < 0.5f || d.AttackCooldown > 1.5f) return false;
         return true;
     }
 
@@ -421,7 +427,8 @@ public class PlayerNetworkSync : NetworkBehaviour
     public void RequestAttackServerRpc(ulong targetNetworkObjectId)
     {
         if (NetworkIsDead.Value || _serverData == null) return;
-        if (Time.time - _lastAttackTime < _controller.attackCooldown) return;
+        // 클라/서버 일치를 위해 서버가 검증·캐시한 _serverData.attackCooldown 사용.
+        if (Time.time - _lastAttackTime < _serverData.attackCooldown) return;
 
         if (!NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(
                 targetNetworkObjectId, out var targetNetObj)) return;
@@ -1400,6 +1407,7 @@ public class PlayerNetworkSync : NetworkBehaviour
         {
             Job = (int)d.job, Affinity = (int)d.affinity, Grade = (int)d.grade,
             MaxHp = d.maxHp, BaseAtk = d.baseAtk, MoveSpeed = d.moveSpeed,
+            AttackCooldown = d.attackCooldown,
             Active0 = GetActive(d, 0), Active1 = GetActive(d, 1),
             Active2 = GetActive(d, 2), Active3 = GetActive(d, 3),
             Passive0 = GetPassive(d, 0), Passive1 = GetPassive(d, 1),

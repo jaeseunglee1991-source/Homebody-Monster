@@ -15,8 +15,9 @@ public class PlayerController : NetworkBehaviour
     [Header("Input")] public VariableJoystick movementJoystick;
     [Header("Combat Settings")]
     public float attackRange = 1.8f;
-    public float attackCooldown = 0.8f;
     public LayerMask enemyLayer;
+
+    private float AttackCooldown => myData?.attackCooldown ?? 0.8f;
     [Header("Visual")]
     public SpriteRenderer spriteRenderer;
     public Animator animator;
@@ -60,6 +61,7 @@ public class PlayerController : NetworkBehaviour
     private PlayerController targetEnemy;
     private float            lastAttackTime = -999f;
     private bool             isChasing      = false;
+    private Coroutine        _autoAttackCoroutine;
     private bool             _lastSyncedChasing = false;
     private bool             movementLocked = true;
     // [FIX] 초기 상태를 잠금(true)으로 변경. InGameManager에서 게임 시작 시 명시적으로 풀어주기 전까지 이동 불가.
@@ -118,6 +120,16 @@ public class PlayerController : NetworkBehaviour
         base.OnNetworkDespawn();
         if (networkSync != null)
             networkSync.NetworkJob.OnValueChanged -= OnNetworkJobChanged;
+
+        // 연결 끊김/씬 전환 시 자동 평타 코루틴 누수 방지.
+        // PlayDeathAnimation 경로와 별개로 Despawn에서도 명시적으로 정리.
+        if (_autoAttackCoroutine != null)
+        {
+            StopCoroutine(_autoAttackCoroutine);
+            _autoAttackCoroutine = null;
+        }
+        targetEnemy = null;
+        isChasing   = false;
 
         if (IsOwner)
             UnityEngine.InputSystem.EnhancedTouch.EnhancedTouchSupport.Disable();
@@ -310,6 +322,16 @@ public class PlayerController : NetworkBehaviour
                     return;
                 }
             }
+            else
+            {
+                // 빈 곳 터치 → 자동 평타/추격 해제 (수동 취소)
+                if (_autoAttackCoroutine != null)
+                {
+                    StopCoroutine(_autoAttackCoroutine);
+                    _autoAttackCoroutine = null;
+                }
+                ClearTarget();
+            }
         }
     }
 
@@ -326,64 +348,86 @@ public class PlayerController : NetworkBehaviour
         return _uiRaycastResults.Count > 0;
     }
 
+    // ════════════════════════════════════════════════════════════
+    //  자동 평타 — 타겟 고정 후 쿨다운마다 자동 공격
+    //  (적 터치 → 타겟 사망/은신/Despawn/null 시 자동 해제)
+    // ════════════════════════════════════════════════════════════
+
     private void SetAttackTarget(PlayerController enemy)
     {
-        targetEnemy = enemy;
-        if (Vector2.Distance(transform.position, enemy.transform.position) <= attackRange)
-            TryAttack(enemy);
-        else
+        // 동일 타겟 재클릭은 무시하되, 코루틴이 비정상 종료되어 null인 경우는 재시작 허용.
+        if (targetEnemy == enemy && _autoAttackCoroutine != null) return;
+
+        if (_autoAttackCoroutine != null)
         {
-            isChasing = true;
-            StartCoroutine(ChaseAndAttack(enemy));
+            StopCoroutine(_autoAttackCoroutine);
+            _autoAttackCoroutine = null;
         }
+
+        targetEnemy = enemy;
+        isChasing   = false;
+        _autoAttackCoroutine = StartCoroutine(AutoAttackRoutine(enemy));
     }
 
-    private IEnumerator ChaseAndAttack(PlayerController enemy)
+    private IEnumerator AutoAttackRoutine(PlayerController enemy)
     {
-        // [버그 수정] 은신(IsStealthy) 체크 누락.
-        // 기존 코드는 !enemy.IsDead만 체크하므로,
-        // 추적 도중 타겟이 은신 스킬을 발동해도 추격이 멈추지 않음.
-        // PlayerVisibility.SetVisible(false)로 레이어는 IgnorePointer로 바뀌지만
-        // isChasing 플래그는 true 유지 → 은신 후에도 사거리 도달 즉시 공격.
-        // 수정: IsStealthy 상태 변경 시 추적 중단.
-        while (enemy != null && !enemy.IsDead && isChasing)
+        while (true)
         {
-            // 은신 발동 시 추적 중단
+            // 1) 타겟 유효성 검사
+            // 조이스틱 입력/FixedUpdate 은신감지 등 외부 경로에서 targetEnemy를
+            // null로 바꾼 경우, 로컬 파라미터 enemy는 여전히 살아있으므로
+            // 필드 일치 여부로 외부 클리어를 감지해 종료한다.
+            if (enemy == null || targetEnemy != enemy)
+            {
+                ClearTarget();
+                yield break;
+            }
+            // Despawn된 타겟의 NetworkVariable 접근 시 NGO 예외 방지를 위해 IsSpawned 선행 체크.
+            if (enemy.IsDead
+                || (enemy.networkSync != null
+                    && (!enemy.networkSync.IsSpawned || enemy.networkSync.NetworkIsDead.Value)))
+            {
+                ClearTarget();
+                yield break;
+            }
             if (enemy.StatusFX != null && enemy.StatusFX.IsStealthy)
             {
-                isChasing  = false;
-                targetEnemy = null;
+                ClearTarget();
                 yield break;
             }
 
-            if (Vector2.Distance(transform.position, enemy.transform.position) <= attackRange)
+            // 2) 거리 계산
+            float dist = Vector2.Distance(transform.position, enemy.transform.position);
+
+            if (dist <= attackRange)
             {
+                // 3) 사거리 내: 쿨다운 체크 후 공격
                 isChasing = false;
-                TryAttack(enemy);
-                yield break;
+                if (!attackLocked && Time.time - lastAttackTime >= AttackCooldown)
+                {
+                    lastAttackTime = Time.time;
+                    var targetNetObj = enemy.GetComponent<NetworkObject>();
+                    if (targetNetObj != null && networkSync != null)
+                        networkSync.RequestAttackServerRpc(targetNetObj.NetworkObjectId);
+                    if (animator != null) animator.SetTrigger("Attack");
+                    AudioManager.Instance?.PlayAttackHit();
+                }
             }
+            else
+            {
+                // 4) 사거리 밖: 추격 (FixedUpdate가 이동 처리)
+                isChasing = true;
+            }
+
             yield return null;
         }
-        isChasing = false;
     }
 
-    // ════════════════════════════════════════════════════════════
-    //  평타 — 서버 RPC 요청
-    // ════════════════════════════════════════════════════════════
-
-    private void TryAttack(PlayerController enemy)
+    private void ClearTarget()
     {
-        if (attackLocked || Time.time - lastAttackTime < attackCooldown
-            || enemy == null || enemy.IsDead) return;
-
-        lastAttackTime = Time.time;
-
-        var targetNetObj = enemy.GetComponent<NetworkObject>();
-        if (targetNetObj != null)
-            networkSync.RequestAttackServerRpc(targetNetObj.NetworkObjectId);
-
-        if (animator != null) animator.SetTrigger("Attack");
-        AudioManager.Instance?.PlayAttackHit();
+        targetEnemy          = null;
+        isChasing            = false;
+        _autoAttackCoroutine = null;
     }
 
     // ════════════════════════════════════════════════════════════
@@ -521,6 +565,13 @@ public class PlayerController : NetworkBehaviour
         isChasing      = false;
         targetEnemy    = null;
         movementLocked = true;
+
+        // 사망 시 자동 평타 코루틴 정리 (PlayerVisibility/StatusFX null 접근 등 잔여 호출 방지).
+        if (_autoAttackCoroutine != null)
+        {
+            StopCoroutine(_autoAttackCoroutine);
+            _autoAttackCoroutine = null;
+        }
 
         if (animator != null) animator.SetTrigger("Die");
         AudioManager.Instance?.PlayDeath();

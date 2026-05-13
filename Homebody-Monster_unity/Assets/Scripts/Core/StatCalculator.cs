@@ -10,21 +10,21 @@ public static class StatCalculator
         return 1.0f + (int)grade * step;
     }
 
-    private struct JobStat { public float HpMult, AtkMult, Speed; }
+    private struct JobStat { public float HpMult, AtkMult, Speed, AttackCooldown; }
 
     private static readonly System.Collections.Generic.Dictionary<JobType, JobStat> JobBaseStats
         = new System.Collections.Generic.Dictionary<JobType, JobStat>
     {
-        { JobType.Warrior,   new JobStat { HpMult = 1.1f, AtkMult = 1.1f, Speed = 3.0f } },
-        { JobType.Tanker,    new JobStat { HpMult = 1.4f, AtkMult = 0.8f, Speed = 2.5f } },
-        { JobType.Paladin,   new JobStat { HpMult = 1.1f, AtkMult = 1.0f, Speed = 2.8f } },
-        { JobType.Berserker, new JobStat { HpMult = 0.9f, AtkMult = 1.3f, Speed = 3.2f } },
-        { JobType.Mage,      new JobStat { HpMult = 0.8f, AtkMult = 1.5f, Speed = 2.8f } },
-        { JobType.Archer,    new JobStat { HpMult = 0.9f, AtkMult = 1.2f, Speed = 3.3f } },
-        { JobType.Priest,    new JobStat { HpMult = 1.0f, AtkMult = 1.0f, Speed = 2.9f } },
-        { JobType.Rogue,     new JobStat { HpMult = 0.9f, AtkMult = 1.3f, Speed = 3.5f } },
-        { JobType.Assassin,  new JobStat { HpMult = 0.8f, AtkMult = 1.4f, Speed = 3.8f } },
-        { JobType.Chef,      new JobStat { HpMult = 1.0f, AtkMult = 1.0f, Speed = 3.0f } },
+        { JobType.Warrior,   new JobStat { HpMult = 1.1f, AtkMult = 1.1f, Speed = 3.0f, AttackCooldown = 0.85f } },
+        { JobType.Tanker,    new JobStat { HpMult = 1.4f, AtkMult = 0.8f, Speed = 2.5f, AttackCooldown = 0.65f } },
+        { JobType.Paladin,   new JobStat { HpMult = 1.1f, AtkMult = 1.0f, Speed = 2.8f, AttackCooldown = 0.80f } },
+        { JobType.Berserker, new JobStat { HpMult = 0.9f, AtkMult = 1.3f, Speed = 3.2f, AttackCooldown = 1.00f } },
+        { JobType.Mage,      new JobStat { HpMult = 0.8f, AtkMult = 1.5f, Speed = 2.8f, AttackCooldown = 1.20f } },
+        { JobType.Archer,    new JobStat { HpMult = 0.9f, AtkMult = 1.2f, Speed = 3.3f, AttackCooldown = 0.90f } },
+        { JobType.Priest,    new JobStat { HpMult = 1.0f, AtkMult = 1.0f, Speed = 2.9f, AttackCooldown = 0.80f } },
+        { JobType.Rogue,     new JobStat { HpMult = 0.9f, AtkMult = 1.3f, Speed = 3.5f, AttackCooldown = 1.00f } },
+        { JobType.Assassin,  new JobStat { HpMult = 0.8f, AtkMult = 1.4f, Speed = 3.8f, AttackCooldown = 1.10f } },
+        { JobType.Chef,      new JobStat { HpMult = 1.0f, AtkMult = 1.0f, Speed = 3.0f, AttackCooldown = 0.80f } },
     };
 
     public static CharacterData GenerateCharacter(string name, JobType? forceJob = null)
@@ -49,8 +49,9 @@ public static class StatCalculator
 
         data.maxHp     = Round1(rawHp  * mult * stat.HpMult);
         data.currentHp = data.maxHp;
-        data.baseAtk   = Round1(rawAtk * mult * stat.AtkMult);
-        data.moveSpeed = stat.Speed;
+        data.baseAtk        = Round1(rawAtk * mult * stat.AtkMult);
+        data.moveSpeed      = stat.Speed;
+        data.attackCooldown = stat.AttackCooldown;
 
         RollSkills(data);
         return data;

@@ -272,6 +272,15 @@ public class CharacterRerollSystem : MonoBehaviour
             if (GameManager.Instance != null)
                 GameManager.Instance.myCharacterData = newData;
 
+            // [버그 수정] 데디케이티드 서버 구조에서 _controller.SetMyData(_serverData)는
+            // 서버 측에서만 실행되어 원격 Owner 클라이언트의 PlayerController.myData가
+            // Start() 시점 OLD 참조로 영구 고정됨. 결과: 리롤 후 클라가 OLD attackCooldown으로
+            // RPC를 발사하지만 서버는 NEW 쿨다운으로 검증 → ghost-shot(데미지 미적용) 또는
+            // 과도한 throttling 발생. moveSpeed/maxHp도 동일 문제이나 NetworkHp/MoveDir 동기화로
+            // 보정됨. 평타 쿨다운은 NetworkVariable이 없으므로 클라 myData를 직접 갱신.
+            var localController = localSync != null ? localSync.GetComponent<PlayerController>() : null;
+            if (localController != null) localController.SetMyData(newData);
+
             // 서버에 새 스탯 재제출 (A-5: 사전 검증된 sync 사용)
             // await 동안 sync가 Despawn될 가능성 재확인
             if (localSync != null && localSync.IsSpawned)

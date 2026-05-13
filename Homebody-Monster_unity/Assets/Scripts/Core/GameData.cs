@@ -102,6 +102,7 @@ public class CharacterData
     public float currentHp;
     public float baseAtk;
     public float moveSpeed;
+    public float attackCooldown = 0.8f;
 
     [System.NonSerialized] public bool  tenacityUsed          = false;
     [System.NonSerialized] public float lastCombatTime        = -999f;
