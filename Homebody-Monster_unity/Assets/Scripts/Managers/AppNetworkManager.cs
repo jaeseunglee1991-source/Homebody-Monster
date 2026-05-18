@@ -141,7 +141,13 @@ public class AppNetworkManager : MonoBehaviour
     public void Disconnect() => _ = DisconnectAsync();
 
     /// <summary>로비 채팅 Realtime 채널만 정리합니다 (NGO 연결과 무관).</summary>
-    public async void DisconnectLobbyChat() => await DisconnectLobbyChatAsync();
+    public async void DisconnectLobbyChat()
+    {
+        // [버그 수정 R2-5] async void 예외 미관측 시 IL2CPP에서 UnobservedTaskException으로 누적되어
+        // Android Logcat에 잡음/잠재적 ANR 유발. 정리 경로의 모든 예외는 안전하게 흡수한다.
+        try { await DisconnectLobbyChatAsync(); }
+        catch (System.Exception e) { Debug.LogWarning($"[AppNet] DisconnectLobbyChat 정리 중 예외 무시: {e.Message}"); }
+    }
 
     /// <summary>
     /// [#1 수정] 로비 채팅 정리의 awaitable 공개 버전.

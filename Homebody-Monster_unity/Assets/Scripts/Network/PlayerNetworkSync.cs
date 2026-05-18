@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -130,6 +131,10 @@ public class PlayerNetworkSync : NetworkBehaviour
     // 게임 중 리롤 시 HP가 만피로 강제 리셋되는 버그가 있어 명시적 플래그로 대체.
     private bool _hasSubmittedCharacterData = false;
 
+    // 자발적 매치 포기(Surrender) 표시. FinalizeDeath 의 킬피드 분기에 사용.
+    // 한 번 true 가 되면 같은 매치에서 다시 false 로 돌아가지 않는다.
+    private bool _surrendered = false;
+
     public CharacterData ServerData  => _serverData;
     // [버그 수정] ServerValidator.BanAndKickAsync가 정확한 userId를 참조할 수 있도록 공개
     public string        ServerUserId => _serverUserId;
@@ -195,15 +200,33 @@ public class PlayerNetworkSync : NetworkBehaviour
         // HandleHpChanged 콜백은 NetworkHp 값이 실제로 변할 때만 발화하므로
         // (myData 도달 전 NetworkHp 동기화 → 이후 HP 변동 없음) 시 HUD 영구 미초기화.
         // 매 프레임 폴링하여 myData/HUD 준비되면 1회 초기화 후 종료.
-        if (IsOwner) StartCoroutine(EnsureHudInitializedRoutine());
+        // [버그 수정] 호스트 환경에서 서버 소유 봇도 IsOwner=true 가 되어 봇의 controller 가
+        // HUD 의 localPlayer 로 잘못 등록되던 문제. 봇은 EnsureHudInitializedRoutine 자체를 스킵.
+        if (IsOwner && (_controller == null || !_controller.IsBot))
+            StartCoroutine(EnsureHudInitializedRoutine());
     }
 
     private System.Collections.IEnumerator EnsureHudInitializedRoutine()
     {
-        float deadline = Time.time + 10f;
+        // [버그 수정] 이전 코드는 10초 데드라인 후 조용히 종료하여
+        // 모바일 고RTT(>500ms) 환경 / 매치 시작 직전 InGameHUD 늦은 활성화 / activeSkills 채워지는
+        // 타이밍이 길어진 경우 HUD가 영구 미초기화되는 버그가 있었음 (체력바·스킬버튼·킬피드 안 보임).
+        // 수정 사항:
+        //  1) 데드라인을 30초로 상향 — 느린 네트워크 환경 커버
+        //  2) 5초 간격 진행 상황 로그 — 어느 조건이 미충족인지 디버깅 가능
+        //  3) 30초 초과 시 LogError 로 명시 경고 — silent failure 방지
+        //  4) 폴링 간격 0.1초로 변경 — 매 프레임 GC alloc 감소 (활성 매치당 1코루틴)
+        const float DEADLINE_SECONDS = 30f;
+        const float LOG_INTERVAL     = 5f;
+        float deadline    = Time.time + DEADLINE_SECONDS;
+        float nextLogTime = Time.time + LOG_INTERVAL;
+
         while (Time.time < deadline)
         {
             if (_hudInitialized) yield break;
+            // OnNetworkDespawn 이후엔 더 이상 초기화 의미 없음 — 코루틴 조기 종료.
+            if (!IsSpawned) yield break;
+
             if (InGameHUD.Instance != null
                 && _controller != null
                 && _controller.myData != null
@@ -215,7 +238,27 @@ public class PlayerNetworkSync : NetworkBehaviour
                 _hudInitialized = true;
                 yield break;
             }
-            yield return null;
+
+            // 5초 간격 진행 상황 로그 — 어느 컴포넌트가 미준비인지 식별.
+            if (Time.time >= nextLogTime)
+            {
+                nextLogTime = Time.time + LOG_INTERVAL;
+                Debug.Log($"[PlayerNetworkSync] HUD 초기화 대기 중 (clientId={OwnerClientId}) — " +
+                          $"HUD={(InGameHUD.Instance != null)}, " +
+                          $"myData={(_controller?.myData != null)}, " +
+                          $"activeSkills={(_controller?.myData?.activeSkills?.Count ?? -1)}");
+            }
+            yield return new WaitForSeconds(0.1f);
+        }
+
+        // 데드라인 초과 — silent failure 방지를 위해 명시적 에러 로그.
+        if (!_hudInitialized)
+        {
+            Debug.LogError($"[PlayerNetworkSync] HUD 초기화 실패 (clientId={OwnerClientId}, " +
+                           $"{DEADLINE_SECONDS}초 타임아웃). 체력바/스킬버튼이 표시되지 않을 수 있습니다. " +
+                           $"InGameHUD={(InGameHUD.Instance != null)}, " +
+                           $"myData={(_controller?.myData != null)}, " +
+                           $"activeSkills={(_controller?.myData?.activeSkills?.Count ?? -1)}");
         }
     }
 
@@ -249,6 +292,9 @@ public class PlayerNetworkSync : NetworkBehaviour
     {
         if (_controller.myData != null) _controller.myData.currentHp = curr;
         if (!IsOwner) return;
+        // [버그 수정] 호스트 환경에서 서버 소유 봇/더미도 IsOwner=true 가 되므로 봇의 HP 변화가
+        // 로컬 HUD HealthBar 를 잘못 갱신하던 버그. _controller.IsBot 검사로 봇은 HUD 영향 X.
+        if (_controller.IsBot) return;
         if (!_hudInitialized && InGameHUD.Instance != null && _controller.myData != null
             && _controller.myData.activeSkills != null && _controller.myData.activeSkills.Count > 0)
         {
@@ -320,7 +366,45 @@ public class PlayerNetworkSync : NetworkBehaviour
         _serverData.playerName = nickname.ToString();
         // [버그 수정] 클라이언트가 전달한 Supabase userId를 서버 캐시에 저장.
         // BanAndKickAsync에서 GameManager.currentPlayerId(서버 자신의 ID) 대신 이 값을 사용.
-        if (!userId.IsEmpty) _serverUserId = userId.ToString();
+        //
+        // [보안 강화] userId 위변조 방어 — 다음 시나리오 차단:
+        //   • 치터가 다른 유저의 UUID를 보내 본인 ban_logs를 조작
+        //   • 리롤 RPC로 userId만 바꿔 책임 회피
+        //   • 임의 문자열을 보내 ban_logs.user_id UUID 컬럼 오염
+        //
+        // 1) UUID 형식 검증 (Supabase auth.users.id는 표준 UUID v4)
+        //    - 형식 불일치 시 캐시하지 않음 (서버 로그로 흔적 남김)
+        // 2) Lock-once 정책 — 한 번 설정되면 후속 RPC 로 변경 불가
+        //    - 리롤 / 재제출 시에도 최초 userId 유지
+        //
+        // 주의: JWT 검증 없이는 최초 1회 위변조는 막을 수 없음.
+        //       완전한 해결은 Supabase JWT 검증 인프라 구축 필요 — 이번 패치는 mitigation.
+        if (!userId.IsEmpty)
+        {
+            if (string.IsNullOrEmpty(_serverUserId))
+            {
+                string candidate = userId.ToString();
+                if (IsValidUuid(candidate))
+                {
+                    _serverUserId = candidate;
+                }
+                else
+                {
+                    Debug.LogWarning($"[Server] 클라이언트 {OwnerClientId}: 잘못된 userId 형식 거부 " +
+                                     $"(value=\"{candidate}\")");
+                }
+            }
+            else
+            {
+                // Lock-once 위반 감지 — 리롤로 userId를 바꾸려는 시도일 가능성 (또는 코드 버그).
+                string candidate = userId.ToString();
+                if (candidate != _serverUserId)
+                {
+                    Debug.LogWarning($"[Server] 클라이언트 {OwnerClientId}: userId 변경 시도 차단 " +
+                                     $"(기존=\"{_serverUserId}\", 시도=\"{candidate}\")");
+                }
+            }
+        }
         // StatusEffectSystem(myData.shieldHp 수정)과 CombatSystem(_serverData.shieldHp 읽기)이
         // 같은 객체를 참조하도록 단일화 → IronSkin 실드, deathMark, tenacity 등 런타임 필드 일관성 보장
         _controller.SetMyData(_serverData);
@@ -376,19 +460,35 @@ public class PlayerNetworkSync : NetworkBehaviour
             //        false로 복원되어도 코루틴이 이미 끝났으므로 재생 패시브 영구 비활성화.
             // 수정: 사망 중에는 tick을 건너뛰고(continue), 부활하면 자동으로 재개.
             //        OnNetworkDespawn 시 코루틴은 Unity가 자동 정리하므로 무한루프 문제 없음.
+            // [버그 수정 C-5] yield 복귀 시점에 이미 Despawn/리롤로 _serverData가 교체됐을 수 있다.
+            // IsSpawned + 로컬 캡처로 stale 참조에 의한 NRE를 차단한다.
+            if (!IsSpawned) yield break;
             if (NetworkIsDead.Value) continue;
-            if (_serverData == null || !_serverData.HasPassive(PassiveSkillType.Regeneration)) continue;
+
+            var data = _serverData;
+            if (data == null || !data.HasPassive(PassiveSkillType.Regeneration)) continue;
 
             float cooldown  = cfg != null ? cfg.RegenerationCooldown : 4f;
             float regenRate = cfg != null ? cfg.RegenerationHpRate   : 0.05f;
             float regenMin  = cfg != null ? cfg.RegenerationMin      : 1.5f;
-            if (Time.time - _serverData.lastCombatTime >= cooldown && NetworkHp.Value < NetworkMaxHp.Value)
+            if (Time.time - data.lastCombatTime >= cooldown && NetworkHp.Value < NetworkMaxHp.Value)
             {
                 float amount = Mathf.Max(regenMin, NetworkMaxHp.Value * regenRate);
                 // HealServer: NetworkHp.Value + _serverData.currentHp 동시 갱신 → 클라이언트 전파
-                _controller.HealServer(amount);
+                if (_controller != null) _controller.HealServer(amount);
             }
         }
+    }
+
+    /// <summary>
+    /// Supabase userId(UUID v4) 형식 검증.
+    /// 표준 8-4-4-4-12 hex 패턴만 허용 — 임의 문자열로 ban_logs.user_id(UUID 컬럼)를 오염시키는 공격 차단.
+    /// </summary>
+    private static bool IsValidUuid(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return false;
+        // UUID 표준 길이는 36자 (32 hex + 4 dash). System.Guid.TryParseExact("D")로 엄격 검증.
+        return System.Guid.TryParseExact(s, "D", out _);
     }
 
     private static bool IsValidCharacterData(NetworkCharacterData d)
@@ -445,10 +545,26 @@ public class PlayerNetworkSync : NetworkBehaviour
         var attackerFx = _controller.StatusFX;
         var targetFx   = targetSync._controller.StatusFX;
 
-        if (attackerFx != null && attackerFx.IsStealthy)
-            attackerFx.RemoveEffect(StatusEffectType.Stealth);
+        // [버그 수정] Stealth 1.5x 첫타 보너스가 평타에서 영구히 미발동하던 치명 버그.
+        //
+        // 이전 순서:
+        //   1) RemoveEffect(Stealth)
+        //      → StatusEffectSystem.OnEffectExpired(Stealth)
+        //      → owner.myData.stealthFirstAttack = false 로 즉시 클리어
+        //   2) CombatSystem.CalculateDamage()
+        //      → attacker.stealthFirstAttack 을 읽지만 이미 false 라 1.5x 부스트 미적용
+        //
+        // 결과: 은신 직후 평타가 일반 데미지로 들어가 도적/암살자 핵심 메커니즘이 통째로 무력화.
+        // (스킬 경로 DealSkillDamageServer 는 stealthFirstAttack 을 참조하지 않으므로 영향 없음)
+        //
+        // 수정: CalculateDamage 를 먼저 실행해 stealthFirstAttack 을 정상 소비한 뒤
+        //        Stealth 효과 자체(시각/상태)는 그 다음에 제거한다. 공격으로 인한 은신 해제라는
+        //        가시적 처리는 그대로 유지된다.
 
         DamageResult result = CombatSystem.CalculateDamage(_serverData, targetSync._serverData, attackerFx, targetFx);
+
+        if (attackerFx != null && attackerFx.IsStealthy)
+            attackerFx.RemoveEffect(StatusEffectType.Stealth);
 
         // 원래 공격 데미지는 Thorns 반사와 무관하게 타겟에게 항상 적용 (먼저 처리하여 Thorns 사망 판정이 올바른 HP 순서를 보도록)
         float newHp = Mathf.Max(0f, targetSync.NetworkHp.Value - result.finalDamage);
@@ -600,7 +716,12 @@ public class PlayerNetworkSync : NetworkBehaviour
         // 호출되어 킬피드에 동일 닉네임 "X가 X를 처치"로 표시되는 문제.
         // 정상 킬은 기존대로, 자해 사망은 "[자멸]" 표기로 분리 송출.
         string victimName = target.NetworkNickname.Value.ToString();
-        if (killer != target)
+        // 자발적 매치 포기는 자멸과 분리하여 "[포기]" 로 표기 (UX 명확성).
+        if (target._surrendered)
+        {
+            BroadcastKillFeedClientRpc("[포기]", victimName);
+        }
+        else if (killer != target)
         {
             // BUG-03: killer가 Despawn(연결 끊김)된 상태에서 NetworkVariable 접근 시 NGO 예외 발생.
             // Thorns/DoT 등 지연 데미지로 가해자가 떠난 뒤 사망이 처리될 때 보호.
@@ -684,6 +805,7 @@ public class PlayerNetworkSync : NetworkBehaviour
         _hasUsedRevive      = false;
         _isProcessingRevive = false;
         _pendingKiller      = null;
+        _surrendered        = false; // surrender 플래그도 새 매치 시작 시 리셋
         CancelAndDisposeCts();
         _skillLastUsed.Clear(); // 스킬 쿨다운 초기화
     }
@@ -848,6 +970,44 @@ public class PlayerNetworkSync : NetworkBehaviour
         FinalizeDeath(this);
     }
 
+    // ════════════════════════════════════════════════════════════
+    //  매치 중도 포기 (Surrender)
+    //
+    //  살아있는 상태에서 인게임 Back 버튼 → 확인 팝업 → Owner 클라이언트가 호출.
+    //  사망 상태에서의 부활 포기는 기존 RequestGiveUpServerRpc 경로를 사용한다.
+    //
+    //  서버 처리:
+    //   1) 게임이 활성화되어 있고, 살아있고, 부활 처리 중이 아니어야 함
+    //   2) HP/실드/낙인 등의 부수 효과 없이 즉시 사망 처리
+    //   3) 킬피드는 "[포기]" 로 분리 표기 (FinalizeDeath 분기)
+    //   4) _hasUsedRevive = true 로 부활창 자체가 뜨지 않게 차단
+    //   5) FinalizeDeath → InGameManager.OnPlayerDied → 기존 결과 흐름 재사용
+    // ════════════════════════════════════════════════════════════
+    [ServerRpc]
+    public void RequestSurrenderServerRpc()
+    {
+        // 사망 상태 / 부활 처리 중 / 서버 데이터 미수신 시 거부.
+        if (NetworkIsDead.Value || _isProcessingRevive || _serverData == null) return;
+        if (_surrendered) return; // 중복 호출 차단
+        // 게임이 아직 시작 전이거나 이미 종료(결과 배너 표시 / 씬 전환 대기 등)된 경우 거부.
+        var mgr = InGameManager.Instance;
+        if (mgr == null || !mgr.isGameActive || mgr.IsGameEnded) return;
+
+        _surrendered   = true;
+        _hasUsedRevive = true; // 부활창 자체를 띄우지 않도록 차단
+        CancelAndDisposeCts();
+
+        // ── 즉시 사망 처리 (Thorns/Tenacity/GuardianAngel 우회) ──
+        _serverData.currentHp = 0f;
+        NetworkHp.Value       = 0f;
+        // ProcessDeath와 동일한 순서로 NetworkIsDead 선행 → DeclareDeath 브로드캐스트.
+        NetworkIsDead.Value   = true;
+        _pendingKiller        = null; // 자해 경로 — FinalizeDeath 의 surrender 분기로 처리됨
+
+        DeclareDeathClientRpc(NetworkObject.NetworkObjectId);
+        FinalizeDeath(this);
+    }
+
     [ClientRpc]
     private void ExecuteReviveClientRpc(Vector2 spawnPos)
     {
@@ -864,6 +1024,14 @@ public class PlayerNetworkSync : NetworkBehaviour
     private void NotifyHitClientRpc(DamageResult result)
     {
         _controller.ShowDamagePopupNetwork(result);
+
+        // [신규] 실제 데미지를 받은 경우에만 피격 모션 재생.
+        // 회피(MISS) / 신의가호(BLOCKED) / 실드 흡수만으로 끝난 경우엔 피격 모션 생략.
+        // 사망(IsDead)은 PlayHurtAnimation 내부에서 가드되어 Die 애니메이션을 가리지 않음.
+        if (!result.isEvaded && !result.isDivineGraceBlocked && result.finalDamage > 0f)
+        {
+            _controller.PlayHurtAnimation();
+        }
     }
 
     [ClientRpc]
@@ -1007,10 +1175,30 @@ public class PlayerNetworkSync : NetworkBehaviour
         }
 
         float newHp = Mathf.Max(0f, NetworkHp.Value - damage);
+
+#if UNITY_EDITOR
+        // 에디터 디버깅 — 데미지 적용 흐름을 한 줄 로그로 추적. 스킬이 적중했는지 빠르게 확인.
+        Debug.Log($"[ApplyDamageServer] target={NetworkNickname.Value} (clientId={OwnerClientId}), " +
+                  $"damage={damage:F1}, hp={NetworkHp.Value:F1} → {newHp:F1} (max={NetworkMaxHp.Value:F0})");
+#endif
+
         NetworkHp.Value       = newHp;
         _serverData.currentHp = newHp;
 
         if (_serverData.deathMarkActive) _serverData.deathMarkAccumulated += damage;
+
+        // [버그 수정] DoT(Poison/Bleed/Burn) · Thorns 반사 · 체인 폭발 · 자해 등 ApplyDamageServer 경로로
+        // 들어오는 모든 피해는 lastCombatTime을 갱신하지 않아 RegenerationNetworkRoutine의 비전투 4초 판정이
+        // 지속적으로 통과되어 "맞으면서 재생되는" 버그가 발생.
+        // 평타 경로(RequestAttackServerRpc → PostDamageEffects)와 스킬 경로(DealSkillDamageServer)는 이미
+        // lastCombatTime을 갱신하므로, 누락된 ApplyDamageServer 경로만 보강.
+        // 공격자 측 lastCombatTime은 호출자(평타/스킬 경로)에서 이미 처리되므로 여기선 피격자(defender)만 갱신.
+        _serverData.lastCombatTime = Time.time;
+
+        // source(공격자)도 함께 갱신 — Thorns 반사·DoT 등으로 가해자가 다른 RPC 경로 없이 피해를 입히는 경우
+        // 공격자의 lastCombatTime이 누락될 수 있어 같은 시점에 일관되게 처리.
+        if (source != null && source != this && source.IsSpawned && source._serverData != null)
+            source._serverData.lastCombatTime = Time.time;
 
         NotifyHitClientRpc(result);
 
@@ -1091,6 +1279,12 @@ public class PlayerNetworkSync : NetworkBehaviour
     [ServerRpc]
     public void RequestUseSkillServerRpc(int slotIndex, Vector2 targetPos, Vector2 facingDir = default)
     {
+#if UNITY_EDITOR
+        Debug.Log($"[PlayerNetworkSync] RequestUseSkillServerRpc 진입: " +
+                  $"client={OwnerClientId}, slot={slotIndex}, dead={NetworkIsDead.Value}, " +
+                  $"serverData={(_serverData != null ? "OK" : "NULL")}, " +
+                  $"skillCount={(_serverData?.activeSkills?.Count ?? -1)}");
+#endif
         if (NetworkIsDead.Value || _serverData == null) return;
 
         var statusFx = _controller.StatusFX;
@@ -1102,8 +1296,19 @@ public class PlayerNetworkSync : NetworkBehaviour
 
         // 서버 측 쿨다운 검증 — 클라이언트가 쿨다운을 무시하고 RPC를 반복 전송해도 서버에서 차단
         float cd = SkillSystem.GetCooldown(skill);
-        if (_skillLastUsed.TryGetValue(skill, out float lastUsed) && Time.time - lastUsed < cd) return;
+        if (_skillLastUsed.TryGetValue(skill, out float lastUsed) && Time.time - lastUsed < cd)
+        {
+#if UNITY_EDITOR
+            Debug.LogWarning($"[PlayerNetworkSync] 스킬 쿨다운 거부: {skill}, " +
+                             $"elapsed={Time.time - lastUsed:F1}/{cd:F1}");
+#endif
+            return;
+        }
         _skillLastUsed[skill] = Time.time;
+
+#if UNITY_EDITOR
+        Debug.Log($"[PlayerNetworkSync] 스킬 활성화 → {skill}");
+#endif
 
         SkillSystem.ActivateSkillServer(skill, _controller, targetPos, facingDir);
         BroadcastSkillVisualsClientRpc((int)skill, targetPos);
@@ -1172,9 +1377,9 @@ public class PlayerNetworkSync : NetworkBehaviour
         var trapPrefab = _controller.trapVisualPrefab;
         if (trapPrefab != null)
         {
-            var go = Object.Instantiate(trapPrefab, trapPos, Quaternion.identity);
+            var go = UnityEngine.Object.Instantiate(trapPrefab, trapPos, Quaternion.identity);
             // 15초 후 자동 삭제 (서버 루틴 최대 시간과 동일)
-            Object.Destroy(go, 15f);
+            UnityEngine.Object.Destroy(go, 15f);
             _controller.RegisterTrapVisual(trapPos, go);
         }
         else
@@ -1322,9 +1527,14 @@ public class PlayerNetworkSync : NetworkBehaviour
 
                 float chainDmg = Mathf.Round(explosionDamage * 0.6f * 10f) / 10f;
                 if (chainDmg <= 0f) continue;
-                // [버그 수정] 체이닝 사망 시 킬 크레딧이 원래 caster에게 귀속되도록
-                // _pendingKiller를 ApplyDamageServer 호출 직전에 설정.
-                pc.networkSync._pendingKiller = casterSync;
+                // [버그 수정] 이전 코드는 ApplyDamageServer 호출 전에 _pendingKiller = casterSync를 강제 설정했는데,
+                // 체인 데미지가 치명타가 아닌 경우 (대상이 생존) stale 값이 영구히 남아 있다가
+                // 추후 다른 플레이어가 이 대상을 처치할 때 킬 크레딧이 엉뚱하게 casterSync에게 귀속됨.
+                // 시나리오: Alice가 Bob에게 낙인 → Alice가 Bob 처치 → 폭발 체인이 Carol에게 30 데미지(비치명) →
+                //          Carol._pendingKiller = Alice 로 남음 → 이후 Dave가 Carol을 검으로 처치 →
+                //          FinalizeDeath에서 _pendingKiller(=Alice) ?? this(=Dave) = Alice → 킬피드/통계 오류.
+                // 수정: 명시적 설정 제거. ApplyDamageServer가 치명타로 ProcessDeath를 호출할 때
+                //       effectiveAttacker = source = casterSync 로 자동 전파되므로 킬 크레딧은 정상 귀속됨.
                 pc.networkSync.ApplyDamageServer(chainDmg, casterSync);
             }
         }
@@ -1372,11 +1582,20 @@ public class PlayerNetworkSync : NetworkBehaviour
     /// </summary>
     private void CancelAndDisposeCts()
     {
-        if (_reviveCts == null) return;
-        if (!_reviveCts.IsCancellationRequested)
-            _reviveCts.Cancel();
-        _reviveCts.Dispose();
+        // [버그 수정 M-2] null 먼저 설정 → 재진입 방지.
+        // 이미 Dispose된 CTS에 Cancel 호출 시 ObjectDisposedException 발생 가능 → try-catch.
+        var cts = _reviveCts;
         _reviveCts = null;
+        if (cts == null) return;
+        try
+        {
+            if (!cts.IsCancellationRequested) cts.Cancel();
+        }
+        catch (ObjectDisposedException) { /* 이미 Dispose됨 — 무시 */ }
+        finally
+        {
+            cts.Dispose();
+        }
     }
 
     // ════════════════════════════════════════════════════════════
@@ -1396,6 +1615,45 @@ public class PlayerNetworkSync : NetworkBehaviour
         var userId   = new Unity.Collections.FixedString64Bytes(
             GameManager.Instance?.currentPlayerId ?? "");
         SubmitCharacterDataServerRpc(netData, nickname, userId);
+    }
+
+    /// <summary>
+    /// [디버그 / 단독 테스트] 서버 권한 봇/더미를 위한 초기화 진입점.
+    /// SubmitCharacterDataServerRpc는 Owner 전용이므로 서버가 직접 스폰한 NetworkObject(=Owner 없음)는
+    /// 정상 흐름에서 _serverData가 영영 채워지지 않아 평타/스킬 모두 무시됨.
+    /// StandaloneTestBootstrap 처럼 서버가 직접 생성한 봇에서만 호출하세요.
+    /// 실 매치 흐름에서는 절대 호출하지 마세요(인증/검증 우회됨).
+    /// </summary>
+    public void DebugInitializeAsBot(CharacterData data, string nickname)
+    {
+        if (!IsServer)
+        {
+            Debug.LogWarning("[PlayerNetworkSync] DebugInitializeAsBot는 서버에서만 호출하세요.");
+            return;
+        }
+        if (data == null) return;
+
+        _serverData = data;
+        _serverData.playerName = nickname ?? "Bot";
+        _skillLastUsed.Clear();
+        _controller.SetMyData(_serverData);
+        // [중요] 호스트 환경에서 서버 소유 더미는 IsOwner == true 가 되어 owner 입력 처리가 그대로 실행됨.
+        // 봇 플래그를 켜서 owner 권한 입력(조이스틱/터치/스킬 단축)을 차단해야 본인과 같이 끌려가지 않음.
+        _controller.SetAsBot(true);
+
+        NetworkNickname.Value = new Unity.Collections.FixedString64Bytes(_serverData.playerName);
+        NetworkHp.Value       = _serverData.maxHp;
+        NetworkMaxHp.Value    = _serverData.maxHp;
+        NetworkJob.Value      = (int)_serverData.job;
+        NetworkAffinity.Value = (int)_serverData.affinity;
+        NetworkGrade.Value    = (int)_serverData.grade;
+
+        _hasSubmittedCharacterData = true;
+
+        if (_regenCoroutine != null) StopCoroutine(_regenCoroutine);
+        _regenCoroutine = StartCoroutine(RegenerationNetworkRoutine());
+
+        Debug.Log($"[PlayerNetworkSync] 봇 초기화 완료: {nickname} (job={data.job}, hp={data.maxHp:F0})");
     }
 
     private NetworkCharacterData BuildNetworkData()

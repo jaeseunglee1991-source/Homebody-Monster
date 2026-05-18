@@ -181,7 +181,9 @@ public class NetworkRoomManager : MonoBehaviour
 
     private async void OnClickJoinRoom()
     {
-        string code = roomCodeInput?.text?.Trim().ToUpper();
+        // [버그 수정 R2-2] Turkish locale에서 'i'.ToUpper()='İ' 변환 문제 차단.
+        // 방 코드 알파벳은 ASCII 고정이므로 ToUpperInvariant 사용.
+        string code = roomCodeInput?.text?.Trim().ToUpperInvariant();
         if (string.IsNullOrEmpty(code) || code.Length != 6)
         {
             ShowStatus("6자리 방 코드를 입력해주세요.");
@@ -301,48 +303,65 @@ public class NetworkRoomManager : MonoBehaviour
         if (_isConnecting) return;
         _isConnecting = true;
 
-        if (_members.Count < 2)
+        // [버그 수정 C-4] 전체 메서드를 try-catch-finally로 감싸 예외 발생 시
+        // _isConnecting이 true로 영구 잔류해 방 기능이 잠기는 문제 차단.
+        // ConnectToGameServer 성공 시(_isConnecting 유지 필요) 별도 플래그로 보존.
+        bool connectStarted = false;
+        try
         {
-            ShowStatus("최소 2명 이상이어야 시작할 수 있습니다.");
-            _isConnecting = false;
-            return;
+            if (_members.Count < 2)
+            {
+                ShowStatus("최소 2명 이상이어야 시작할 수 있습니다.");
+                return;
+            }
+
+            string myUid = SupabaseManager.Instance?.Client?.Auth?.CurrentUser?.Id;
+            int notReady = 0;
+            foreach (var m in _members)
+                if (m.PlayerId != myUid && !m.IsReady)
+                    notReady++;
+
+            if (notReady > 0)
+            {
+                ShowStatus($"아직 준비 중인 플레이어가 {notReady}명 있습니다.");
+                return;
+            }
+
+            ShowStatus("게임 시작 중...");
+
+            // [버그 수정] 프라이빗룸 방장이 게임 시작 시 서버 IP가 항상 127.0.0.1이 되는 버그.
+            // GameManager.gameServerIp는 MatchmakingManager 또는 ConnectToGameServer 완료 후 세팅되므로
+            // 프라이빗룸 첫 시작 시점에는 null → "127.0.0.1" 폴백 → 모든 클라이언트 루프백 접속 실패.
+            // MatchmakingManager와 동일하게 커맨드라인 → 환경변수 → Inspector 폴백 순서로 결정.
+            string serverIp   = GetResolvedServerIp();
+            ushort serverPort = GetResolvedServerPort();
+            string endpoint   = $"{serverIp}:{serverPort}";
+
+            bool ok = await SupabaseManager.Instance.StartPrivateRoom(_currentRoomId, endpoint);
+            if (!ok)
+            {
+                ShowStatus("게임 시작에 실패했습니다. 다시 시도해주세요.");
+                Debug.LogError("[Room] start_private_room RPC 실패");
+                // A-24: 실패 후 startButton.interactable이 복구되지 않아 방장이 재시도하려면 방을 다시 열어야 했던 UX 버그.
+                if (startButton != null) startButton.interactable = _members.Count >= 2;
+                return;
+            }
+
+            connectStarted = true;
+            ConnectToGameServer(serverIp, serverPort);
         }
-
-        string myUid = SupabaseManager.Instance?.Client?.Auth?.CurrentUser?.Id;
-        int notReady = 0;
-        foreach (var m in _members)
-            if (m.PlayerId != myUid && !m.IsReady)
-                notReady++;
-
-        if (notReady > 0)
+        catch (Exception e)
         {
-            ShowStatus($"아직 준비 중인 플레이어가 {notReady}명 있습니다.");
-            _isConnecting = false;
-            return;
-        }
-
-        ShowStatus("게임 시작 중...");
-
-        // [버그 수정] 프라이빗룸 방장이 게임 시작 시 서버 IP가 항상 127.0.0.1이 되는 버그.
-        // GameManager.gameServerIp는 MatchmakingManager 또는 ConnectToGameServer 완료 후 세팅되므로
-        // 프라이빗룸 첫 시작 시점에는 null → "127.0.0.1" 폴백 → 모든 클라이언트 루프백 접속 실패.
-        // MatchmakingManager와 동일하게 커맨드라인 → 환경변수 → Inspector 폴백 순서로 결정.
-        string serverIp   = GetResolvedServerIp();
-        ushort serverPort = GetResolvedServerPort();
-        string endpoint   = $"{serverIp}:{serverPort}";
-
-        bool ok = await SupabaseManager.Instance.StartPrivateRoom(_currentRoomId, endpoint);
-        if (!ok)
-        {
-            ShowStatus("게임 시작에 실패했습니다. 다시 시도해주세요.");
-            Debug.LogError("[Room] start_private_room RPC 실패");
-            _isConnecting = false;
-            // A-24: 실패 후 startButton.interactable이 복구되지 않아 방장이 재시도하려면 방을 다시 열어야 했던 UX 버그.
+            Debug.LogError($"[Room] OnClickStartMatch 예외: {e.Message}\n{e.StackTrace}");
+            ShowStatus("예기치 않은 오류가 발생했습니다. 다시 시도해주세요.");
             if (startButton != null) startButton.interactable = _members.Count >= 2;
-            return;
         }
-
-        ConnectToGameServer(serverIp, serverPort);
+        finally
+        {
+            // ConnectToGameServer를 호출하지 못한 경로(검증 실패, RPC 실패, 예외)에서만 복구.
+            // 정상 진행 시 ConnectToGameServer 내부에서 _isConnecting 상태를 관리한다.
+            if (!connectStarted) _isConnecting = false;
+        }
     }
 
     // ════════════════════════════════════════════════════════════

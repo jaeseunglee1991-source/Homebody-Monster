@@ -20,14 +20,11 @@ public class CombatSystem : MonoBehaviour
         float dmg    = overrideDamage;
         var   cfg    = Cfg;
 
-        // ── 은신 첫 타 보너스 ────────────────────────────────
-        if (attacker != null && attacker.stealthFirstAttack)
-        {
-            float stealthMult = cfg != null ? cfg.StealthFirstHitMultiplier : 1.5f;
-            dmg *= stealthMult;
-            attacker.stealthFirstAttack = false;
-            result.isCritical = true;
-        }
+        // [버그 수정] 은신 첫 타 보너스는 회피/무효화/면역 체크 *이전*에는 소진하지 않는다.
+        // 이전 코드: 보너스 적용 + 플래그 false 처리를 바로 수행 → 직후 Ninja 회피·Divine Grace·Immune
+        //            로 데미지=0 반환되면 보너스가 미스에 통째로 낭비되는 버그.
+        // 수정: 회피·무효화·면역 체크가 끝난 뒤(피해가 실제로 들어갈 게 확정된 시점) 보너스 적용.
+        // 결과: 회피된 공격은 stealth 1타 효과를 유지 → 다음 공격에 활용 가능.
 
         if (attackerFX != null) dmg *= attackerFX.GetAtkMultiplier();
 
@@ -43,6 +40,16 @@ public class CombatSystem : MonoBehaviour
         // ── 면역 ──────────────────────────────────────────────
         if (defenderFX != null && defenderFX.IsImmune)
         { result.isEvaded = true; result.finalDamage = 0f; return result; }
+
+        // ── 은신 첫 타 보너스 — 회피·무효화 검사 통과 후에만 소진 ──
+        // 이 시점에는 데미지가 실제로 적용될 것이 확정되므로 stealthFirstAttack 플래그를 안전하게 false 처리.
+        if (attacker != null && attacker.stealthFirstAttack)
+        {
+            float stealthMult = cfg != null ? cfg.StealthFirstHitMultiplier : 1.5f;
+            dmg *= stealthMult;
+            attacker.stealthFirstAttack = false;
+            result.isCritical = true;
+        }
 
         // ── 행운의 일격 ───────────────────────────────────────
         float luckyChance = cfg != null ? cfg.LuckyStrikeChance    : 0.1f;

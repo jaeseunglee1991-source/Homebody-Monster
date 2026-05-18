@@ -73,6 +73,12 @@ public class ServerValidator : MonoBehaviour
 
     public void RecordAndValidatePosition(PlayerNetworkSync sync, Vector2 newPosition)
     {
+        // [버그 수정] MonoBehaviour 의 enabled=false 는 Update 만 차단할 뿐
+        // 외부에서 직접 호출되는 public 메서드(PlayerNetworkSync.FixedUpdate 경유) 는 그대로 실행됨.
+        // 디버그 모드 / StandaloneTestBootstrap 에서 enabled=false 로 두면 안티치트를 비활성화하려는
+        // 의도였으나 실제로는 계속 작동해 호스트 초기 스폰을 텔레포트로 오탐 → 위치 롤백.
+        // 명시적 enabled 체크로 진정한 비활성을 보장.
+        if (!enabled) return;
         if (sync == null || !NetworkManager.Singleton.IsServer) return;
 
         ulong clientId = sync.OwnerClientId;

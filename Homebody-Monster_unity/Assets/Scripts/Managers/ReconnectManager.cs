@@ -44,16 +44,33 @@ public class ReconnectManager : MonoBehaviour
         DontDestroyOnLoad(gameObject);
     }
 
+    // [버그 수정 R2-6] 두 싱글톤(AppNetworkManager / ReconnectManager) 모두 DontDestroyOnLoad이며
+    // Awake/OnEnable 실행 순서가 비결정적. OnEnable에서 AppNetworkManager.Instance == null이면
+    // 구독이 누락되어 인게임 디스커넥트 시 재접속 UI가 영구 미작동. 코루틴으로 Instance 준비를 대기.
+    private bool _disconnectSubscribed = false;
+
     private void OnEnable()
     {
-        if (AppNetworkManager.Instance != null)
+        StartCoroutine(SubscribeDisconnectWhenReady());
+    }
+
+    private System.Collections.IEnumerator SubscribeDisconnectWhenReady()
+    {
+        while (AppNetworkManager.Instance == null) yield return null;
+        if (!_disconnectSubscribed)
+        {
             AppNetworkManager.Instance.OnClientDisconnected += OnClientDisconnected;
+            _disconnectSubscribed = true;
+        }
     }
 
     private void OnDisable()
     {
-        if (AppNetworkManager.Instance != null)
+        if (_disconnectSubscribed && AppNetworkManager.Instance != null)
+        {
             AppNetworkManager.Instance.OnClientDisconnected -= OnClientDisconnected;
+            _disconnectSubscribed = false;
+        }
     }
 
     // ════════════════════════════════════════════════════════════

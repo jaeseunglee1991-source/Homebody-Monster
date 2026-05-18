@@ -278,8 +278,9 @@ public class LobbySettingsPanel : MonoBehaviour
         // SettingsManager에 마스터 볼륨 없음 → AudioListener 직접 제어
         AudioListener.volume = val;
         PlayerPrefs.SetFloat(KEY_MASTER_VOLUME, val);
-        // [버그5 수정] 슬라이더 드래그 중 강제 종료 시에도 저장되도록 즉시 Save
-        PlayerPrefs.Save();
+        // [버그 수정 R2-9] 슬라이더 드래그는 onValueChanged가 매 프레임 발화 → 매 프레임 PlayerPrefs.Save는
+        // Android SharedPreferences를 통째로 디스크에 flush 해 스터터/배터리 소모 유발.
+        // SettingsManager.OnApplicationPause/Quit + CloseSettings.SaveAll에서 flush되므로 메모리 쓰기만 유지.
         SetVolumeText(masterVolumeText, val);
     }
 
@@ -369,7 +370,7 @@ public class LobbySettingsPanel : MonoBehaviour
             // [버그8 수정] DisconnectAsync await 이후에도 파괴 여부 재확인
             if (this == null) return;
 
-            GameManager.Instance?.LoadScene("LoginScene");
+            GameManager.Instance?.LoadScene("Login_Scene");
         }
         finally
         {

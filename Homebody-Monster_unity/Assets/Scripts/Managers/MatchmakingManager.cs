@@ -418,6 +418,14 @@ public class MatchmakingManager : MonoBehaviour
             catch (Exception e)
             {
                 Debug.LogError($"[Server] 매칭 처리 오류: {e.Message}");
+                // [버그 수정 H-3] outer catch 안전망: ExecuteServerMatch가 inner catch
+                // 이후 또 다른 예외(예: update_queue_status 실패 후 후속 throw)로
+                // 빠져나오면 PendingExpectedPlayerCount가 잔류해 다음 매치 인원 수 오류 발생.
+                if (NetworkSpawnManager.PendingExpectedPlayerCount > 0)
+                {
+                    Debug.LogWarning("[Server] outer catch — PendingExpectedPlayerCount 강제 초기화");
+                    NetworkSpawnManager.PendingExpectedPlayerCount = 0;
+                }
             }
         }
     }

@@ -575,6 +575,16 @@ public partial class SupabaseManager : MonoBehaviour
     {
         try
         {
+            // [버그 수정 M-1] 채널이 이미 Joined 상태면 재구독 스킵.
+            // ChatButtonTimeoutRoutine의 10초 재연결이 매번 Subscribe()를 중복 호출하여
+            // Realtime 핸들러/연결 누적이 누적되던 문제 차단.
+            if (_isLobbyChatDbSubscribed && _lobbyChatDbChannel != null &&
+                _lobbyChatDbChannel.State == Supabase.Realtime.Constants.ChannelState.Joined)
+            {
+                Debug.Log("[Supabase] 로비 채팅 DB 채널 이미 구독 중 — 재구독 스킵");
+                return;
+            }
+
             if (_lobbyChatDbChannel == null)
             {
                 _lobbyChatDbChannel = Client.Realtime.Channel("lobby-chat-db");
@@ -732,10 +742,11 @@ public partial class SupabaseManager : MonoBehaviour
             message = message.Substring(0, MaxChatMessageLength);
 
         // [BUG-12] 금칙어 필터링
-        string lowerMsg = message.ToLower();
+        // [버그 수정 R2-2] Turkish locale 등 culture-sensitive 환경에서 ToLower 우회 차단.
+        string lowerMsg = message.ToLowerInvariant();
         foreach (string bad in ForbiddenWords.List)
         {
-            if (!string.IsNullOrEmpty(bad) && lowerMsg.Contains(bad.ToLower()))
+            if (!string.IsNullOrEmpty(bad) && lowerMsg.Contains(bad.ToLowerInvariant()))
             {
                 Debug.Log("[Supabase] 금칙어 포함 채팅 차단");
                 return false;

@@ -82,6 +82,20 @@ public class CharacterRerollSystem : MonoBehaviour
         { ActiveSkillType.HolyExplosion,    "성스러운 폭발" },
         { ActiveSkillType.HealingLight,     "치유의 빛"     },
         { ActiveSkillType.GuardianAngel,    "수호 천사"     },
+        // [버그 수정 H-1] 도적/암살자/셰프 직업 스킬 한국어 매핑 추가.
+        // 누락 시 GetSkillName이 영문 enum 이름을 그대로 노출하여 리롤 UI에 영문 표시.
+        { ActiveSkillType.PoisonDagger,     "독 단검"       },
+        { ActiveSkillType.Ambush,           "기습"          },
+        { ActiveSkillType.SmokeBomb,        "연막탄"        },
+        { ActiveSkillType.ShadowRaid,       "그림자 습격"   },
+        { ActiveSkillType.VitalStrike,      "급소 찌르기"   },
+        { ActiveSkillType.Shuriken,         "표창"          },
+        { ActiveSkillType.StealthSkill,     "은신"          },
+        { ActiveSkillType.DeathMark,        "죽음의 낙인"   },
+        { ActiveSkillType.FryingPan,        "프라이팬"      },
+        { ActiveSkillType.BurningOil,       "불타는 기름"   },
+        { ActiveSkillType.SnackTime,        "간식 타임"     },
+        { ActiveSkillType.FeastTime,        "만찬 시간"     },
     };
 
     private static string GetSkillName(ActiveSkillType skill)
@@ -229,10 +243,9 @@ public class CharacterRerollSystem : MonoBehaviour
             return;
         }
 
-        _isRolling = true;
-        if (claimButton != null) claimButton.interactable = false;
-        SetStatus("처리 중...");
-
+        // [버그 수정 R-1] localSync 사전 검증을 _isRolling 설정 전에 수행.
+        // 이전 코드: _isRolling=true / 버튼 비활성 후 localSync==null 시 finally 미경유 early-return
+        // → _isRolling이 true로 영구 잔류해 같은 리롤 윈도우 동안 버튼이 영구 잠김.
         // A-5: 피자 차감 전에 IsOwner PlayerNetworkSync가 실제로 존재하는지 먼저 검증.
         // 차감 후 sync 탐색 실패 시 "피자는 소모됐는데 리롤 효과는 없는" 결제 사기성 결함이 발생.
         PlayerNetworkSync localSync = null;
@@ -246,6 +259,10 @@ public class CharacterRerollSystem : MonoBehaviour
             Debug.LogError("[Reroll] PlayerNetworkSync(IsOwner) 미존재 → 결제 차단 (피자 보존)");
             return;
         }
+
+        _isRolling = true;
+        if (claimButton != null) claimButton.interactable = false;
+        SetStatus("처리 중...");
 
         // HIGH-03: 기존엔 try-finally가 없어 SpendPizzaForReroll/ResubmitCharacterData 등에서 예외 발생 시
         // _isRolling=true가 영구히 남아 같은 세션 내 리롤 버튼이 회복 불가능하게 잠기던 버그.

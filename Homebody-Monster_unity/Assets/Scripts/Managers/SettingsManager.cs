@@ -38,9 +38,11 @@ public class SettingsManager : MonoBehaviour
     /// <summary>저장된 설정을 불러오고 실제 기기에 적용합니다.</summary>
     public void LoadAndApplySettings()
     {
-        BgmVolume       = PlayerPrefs.GetFloat(KEY_BGM, 1f);
-        SfxVolume       = PlayerPrefs.GetFloat(KEY_SFX, 1f);
-        TargetFPS       = PlayerPrefs.GetInt(KEY_FPS, 60);
+        // [버그 수정 R2-8] 손상된 prefs 또는 변조된 값이 그대로 적용되어 음량이 음수가 되거나
+        // TargetFrameRate=0/음수로 프레임 제한이 무력화되는 문제 차단.
+        BgmVolume       = Mathf.Clamp01(PlayerPrefs.GetFloat(KEY_BGM, 1f));
+        SfxVolume       = Mathf.Clamp01(PlayerPrefs.GetFloat(KEY_SFX, 1f));
+        TargetFPS       = Mathf.Clamp(PlayerPrefs.GetInt(KEY_FPS, 60), 30, 120);
         IsLowResolution = PlayerPrefs.GetInt(KEY_RES, 0) == 1;
 
         ApplyPerformanceSettings();

@@ -62,6 +62,16 @@ public class InGameHUD : MonoBehaviour
     /// </summary>
     public GameObject controlsRoot;
 
+    [Header("포기 확인 UI")]
+    /// <summary>
+    /// 인게임 Back 키(또는 Esc) → "게임을 포기하시겠습니까?" 팝업 루트.
+    /// Inspector에서 패널 GameObject(기본 비활성), 확인/취소 버튼을 연결하세요.
+    /// 실시간 멀티플레이이므로 게임은 일시정지되지 않고 팝업만 오버레이됩니다.
+    /// </summary>
+    public GameObject surrenderConfirmPanel;
+    public Button     surrenderConfirmButton;
+    public Button     surrenderCancelButton;
+
     [Header("부활 UI")]
     public GameObject      revivePanel;
     public TextMeshProUGUI reviveTimerText;
@@ -89,9 +99,10 @@ public class InGameHUD : MonoBehaviour
         if (Instance == null) Instance = this;
         else { Destroy(gameObject); return; }
 
-        if (endBannerPanel != null) endBannerPanel.SetActive(false);
-        if (revivePanel    != null) revivePanel.SetActive(false);
-        if (killFeedText   != null) killFeedText.text = "";
+        if (endBannerPanel         != null) endBannerPanel.SetActive(false);
+        if (revivePanel            != null) revivePanel.SetActive(false);
+        if (surrenderConfirmPanel  != null) surrenderConfirmPanel.SetActive(false);
+        if (killFeedText           != null) killFeedText.text = "";
         
         if (timerText == null)
         {
@@ -120,6 +131,20 @@ public class InGameHUD : MonoBehaviour
 
     public void InitPlayerUI(PlayerController player)
     {
+        // [버그 수정] 최종 방어 — 봇/더미가 어떤 경로로든 여기 도달하면 거부.
+        // 호스트 환경에서 서버 소유 더미도 IsOwner=true 라서 PlayerController.Start /
+        // PlayerNetworkSync 등 여러 진입점에서 InitPlayerUI 호출이 발생할 수 있음.
+        // 더미가 등록되면 SetupSkillButtons 가 더미의 빈 activeSkills 로 버튼을 셋업해
+        // skill 버튼이 사라지거나 localPlayer.UseSkill 이 skillCount=0 으로 거부됨.
+        if (player == null || player.IsBot)
+        {
+#if UNITY_EDITOR
+            if (player != null && player.IsBot)
+                Debug.LogWarning($"[InGameHUD] 봇/더미의 InitPlayerUI 호출 차단: {player.name}");
+#endif
+            return;
+        }
+
         // H-14: 중복 호출 가드 — 첫 호출에서 즉시 플래그를 세워서 PlayerController.Start와
         // HandleHpChanged가 동시 진입할 때 SetupSkillButtons가 두 번 실행되는 것을 방지.
         if (_hudInitialized && localPlayer == player) return;
@@ -127,6 +152,12 @@ public class InGameHUD : MonoBehaviour
 
         localPlayer = player;
         SetupSkillButtons(player);
+
+#if UNITY_EDITOR
+        int skills = player.myData?.activeSkills?.Count ?? -1;
+        Debug.Log($"[InGameHUD] InitPlayerUI 등록: {player.name} (instanceID={player.GetInstanceID()}, " +
+                  $"_isBot={player.IsBot}, activeSkills={skills})");
+#endif
     }
 
     /// <summary>
@@ -479,6 +510,77 @@ public class InGameHUD : MonoBehaviour
         }
         if (revivePanel != null) revivePanel.SetActive(false);
         pendingReviveSync = null;
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  매치 중도 포기(Surrender) UI
+    //
+    //  PlayerController 에서 Back 키 / Esc 키 / Android Back 이벤트로 호출.
+    //  실시간 멀티플레이이므로 게임 시간/네트워크는 그대로 흐른다.
+    // ════════════════════════════════════════════════════════════
+
+    /// <summary>현재 surrender 확인 패널이 표시 중인지 여부.</summary>
+    public bool IsSurrenderConfirmShown =>
+        surrenderConfirmPanel != null && surrenderConfirmPanel.activeInHierarchy;
+
+    /// <summary>
+    /// 포기 확인 팝업을 표시합니다. 부활창이 떠 있거나 게임이 이미 끝났다면 무시.
+    /// </summary>
+    public void ShowSurrenderConfirm()
+    {
+        if (surrenderConfirmPanel == null) return;
+
+        // 이미 표시 중이면 중복 호출 무시.
+        if (surrenderConfirmPanel.activeSelf) return;
+
+        // 게임이 아직 시작 전이거나, 종료 단계(결과 배너 / 씬 전환 대기)이면 띄우지 않음.
+        var mgr = InGameManager.Instance;
+        if (mgr != null && (!mgr.isGameActive || mgr.IsGameEnded)) return;
+
+        // 부활 패널이 열려있으면 그쪽이 우선 — surrender 대신 부활/포기 선택을 사용.
+        if (revivePanel != null && revivePanel.activeSelf) return;
+
+        // 로컬 플레이어가 이미 사망 상태이면 surrender 불필요(이미 관전 모드).
+        if (localPlayer != null && localPlayer.IsDead) return;
+
+        surrenderConfirmPanel.SetActive(true);
+
+        if (surrenderConfirmButton != null)
+        {
+            surrenderConfirmButton.onClick.RemoveAllListeners();
+            surrenderConfirmButton.onClick.AddListener(OnSurrenderConfirmed);
+        }
+        if (surrenderCancelButton != null)
+        {
+            surrenderCancelButton.onClick.RemoveAllListeners();
+            surrenderCancelButton.onClick.AddListener(HideSurrenderConfirm);
+        }
+    }
+
+    public void HideSurrenderConfirm()
+    {
+        if (surrenderConfirmPanel != null) surrenderConfirmPanel.SetActive(false);
+    }
+
+    private void OnSurrenderConfirmed()
+    {
+        // 1회만 동작하도록 즉시 버튼 비활성화 (RPC 응답 대기 중 중복 클릭 차단).
+        if (surrenderConfirmButton != null) surrenderConfirmButton.interactable = false;
+        if (surrenderCancelButton  != null) surrenderCancelButton.interactable  = false;
+
+        // 로컬 플레이어 → 자신의 PlayerNetworkSync.RequestSurrenderServerRpc 호출.
+        if (localPlayer != null && localPlayer.networkSync != null
+            && localPlayer.networkSync.IsSpawned)
+        {
+            localPlayer.networkSync.RequestSurrenderServerRpc();
+        }
+
+        // 패널은 즉시 닫음 (사망 처리 후 관전 모드 진입은 기존 흐름 그대로 동작).
+        HideSurrenderConfirm();
+
+        // 다음 매치를 위해 interactable 복구.
+        if (surrenderConfirmButton != null) surrenderConfirmButton.interactable = true;
+        if (surrenderCancelButton  != null) surrenderCancelButton.interactable  = true;
     }
 
     // ════════════════════════════════════════════════════════════

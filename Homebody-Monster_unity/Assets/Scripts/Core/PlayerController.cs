@@ -68,6 +68,15 @@ public class PlayerController : NetworkBehaviour
     private bool             attackLocked   = true;
     private static Camera    mainCam;
 
+    // [디버그 / 단독 테스트] 서버가 직접 스폰한 더미/봇 식별 플래그.
+    // 호스트 환경에서는 OwnerClientId == ServerClientId == 0 이므로 봇도 IsOwner 가 true 가 되어
+    // HandleJoystickInput / HandleTouchAttackInput / FixedUpdate 가 동작 → 본인 + 더미가 동시에 이동.
+    // 이 플래그가 true 면 owner 입력 처리를 모두 우회하여 더미는 가만히 있도록 함.
+    // 정상 매칭 흐름에서는 절대 set 되지 않으므로 부작용 없음.
+    private bool             _isBot         = false;
+    public bool IsBot => _isBot;
+    public void SetAsBot(bool isBot) => _isBot = isBot;
+
     // ════════════════════════════════════════════════════════════
     //  Unity 생명주기
     // ════════════════════════════════════════════════════════════
@@ -181,14 +190,31 @@ public class PlayerController : NetworkBehaviour
 
     private void Start()
     {
-        // 프리팹의 기본값을 무시하고 GameManager의 실제 캐릭터 데이터로 덮어쓰기
-        if (GameManager.Instance?.myCharacterData != null)
+        // [버그 수정] 모든 PlayerController 에서 무조건 GameManager.myCharacterData 로 덮어쓰면
+        // 다음 두 시나리오에서 데이터 오염 발생:
+        //  ① 호스트 환경에서 서버 소유 더미가 IsOwner=true 가 되어 본인 controller 와 더미 controller
+        //     양쪽 다 myData = GameManager.myCharacterData (같은 객체!) 를 가리킴.
+        //     → 더미 피격 시 HandleHpChanged 가 dummy._controller.myData.currentHp = dummy_hp 로
+        //        호스트의 currentHp 를 9999 등으로 덮어버림.
+        //  ② 멀티플레이 환경에서 원격 클라이언트의 PlayerController 역시 로컬 GameManager 데이터로
+        //     덮어써져 원격 캐릭터 정보가 로컬 캐릭터 정보로 오염됨.
+        //
+        // 진짜로 myData = GameManager.myCharacterData 가 필요한 경우는 단 하나:
+        //  로컬 클라이언트가 직접 조작하는 본인 캐릭터 (= IsOwner && _isBot == false).
+        //  그 외의 경우엔 PlayerNetworkSync.SubmitCharacterDataServerRpc / DebugInitializeAsBot 가
+        //  SetMyData(_serverData) 로 이미 정확한 데이터를 주입했으므로 그대로 둔다.
+        if (IsOwner && !_isBot && GameManager.Instance?.myCharacterData != null)
             myData = GameManager.Instance.myCharacterData;
 
         // 등록은 PlayerNetworkSync.OnNetworkSpawn에서 수행하므로 중복 제거
         // (원본에서는 Start에서도 호출했으나 NGO 구조에서는 OnNetworkSpawn이 기준)
 
-        if (IsOwner && InGameHUD.Instance != null && myData != null)
+        // [버그 수정] 호스트 환경에서 서버 소유 더미도 IsOwner=true 이므로 본인 + 더미가
+        // 둘 다 InitPlayerUI / UpdateHealthBar 를 호출하여 마지막에 Start 가 실행된 캐릭터가
+        // InGameHUD.localPlayer 와 healthBar 를 차지함. 결과적으로 더미의 myData (activeSkills 비어있음)
+        // 가 localPlayer 로 등록되어 스킬 버튼이 실제로는 더미.UseSkill 을 호출하고 skillCount=0 으로 거부됨.
+        // → 봇은 HUD 와 무관하므로 InitPlayerUI / UpdateHealthBar 호출을 명시적으로 스킵.
+        if (IsOwner && !_isBot && InGameHUD.Instance != null && myData != null)
         {
             InGameHUD.Instance.InitPlayerUI(this);
             InGameHUD.Instance.UpdateHealthBar(myData.currentHp, myData.maxHp);
@@ -197,6 +223,11 @@ public class PlayerController : NetworkBehaviour
 
     private void Update()
     {
+        // [디버그] 봇은 owner 권한이 있어도 입력 처리를 절대 받지 않는다.
+        if (_isBot) { UpdateAnimation(); return; }
+
+        if (IsOwner) HandleBackKeyInput();
+
         if (IsDead) return;
 
         if (IsOwner)
@@ -222,6 +253,9 @@ public class PlayerController : NetworkBehaviour
 
     private void FixedUpdate()
     {
+        // [디버그] 봇은 owner 권한이 있어도 이동/추격을 처리하지 않는다.
+        if (_isBot) return;
+
         if (IsDead || !IsOwner) return;
 
         if (movementLocked)
@@ -292,18 +326,61 @@ public class PlayerController : NetworkBehaviour
             networkSync.UpdateMoveDirServerRpc(moveDir);
     }
 
+    // ════════════════════════════════════════════════════════════
+    //  Back 키 / ESC — 매치 중도 포기 확인 팝업 토글
+    //  (실시간 멀티이므로 게임 자체는 일시정지하지 않고 오버레이만 표시)
+    // ════════════════════════════════════════════════════════════
+    private void HandleBackKeyInput()
+    {
+        var kb = UnityEngine.InputSystem.Keyboard.current;
+        if (kb == null) return;
+        // Android Back 버튼은 New Input System에서 escapeKey 로 매핑됨.
+        if (!kb.escapeKey.wasPressedThisFrame) return;
+
+        var hud = InGameHUD.Instance;
+        if (hud == null) return;
+
+        // 이미 표시 중이면 ESC 로 닫기 (토글 UX).
+        if (hud.IsSurrenderConfirmShown)
+        {
+            hud.HideSurrenderConfirm();
+            return;
+        }
+
+        // 사망/관전 상태 또는 게임이 활성화되지 않은 경우엔 무시.
+        // (InGameHUD.ShowSurrenderConfirm 내부에서 한 번 더 가드)
+        hud.ShowSurrenderConfirm();
+    }
+
     private void HandleTouchAttackInput()
     {
+        if (attackLocked) return;
+        // MEDIUM-02: 씬 전환 직후 mainCam이 null일 수 있음 (정적 캐시가 이전 씬 카메라를 가리키다 파괴됨).
+        if (mainCam == null) mainCam = Camera.main;
+        if (mainCam == null) return;
+
+#if UNITY_EDITOR || UNITY_STANDALONE
+        // [디버그 / 에디터 테스트] 마우스 좌클릭을 터치로 시뮬레이트.
+        // 모바일 빌드에서는 Touch 만 사용하지만, Unity 에디터에서는 마우스 클릭이 터치 이벤트로
+        // 변환되지 않아 StandaloneTestBootstrap 으로 테스트 시 평타가 불가능했음.
+        // EnhancedTouchSupport 와 무관하게 Mouse.current 가 동작하므로 안전.
+        var mouse = UnityEngine.InputSystem.Mouse.current;
+        if (mouse != null && mouse.leftButton.wasPressedThisFrame)
+        {
+            Vector2 mouseScreen = mouse.position.ReadValue();
+            if (!IsTouchOverUI(mouseScreen))
+            {
+                Vector2 mouseWorld = mainCam.ScreenToWorldPoint(mouseScreen);
+                ProcessAttackClickAt(mouseWorld);
+            }
+        }
+#endif
+
         // M-2: OnNetworkDespawn에서 EnhancedTouchSupport.Disable() 후 같은 프레임 Update에서
         // Touch.activeTouches 접근 시 InvalidOperationException 발생하던 버그.
         if (!UnityEngine.InputSystem.EnhancedTouch.EnhancedTouchSupport.enabled) return;
         var activeTouches = UnityEngine.InputSystem.EnhancedTouch.Touch.activeTouches;
-        if (attackLocked || activeTouches.Count == 0) return;
-
-        // MEDIUM-02: 씬 전환 직후 mainCam이 null일 수 있음 (정적 캐시가 이전 씬 카메라를 가리키다 파괴됨).
-        // ScreenToWorldPoint 호출 전 회복 시도 후 여전히 null이면 안전하게 종료.
-        if (mainCam == null) mainCam = Camera.main;
-        if (mainCam == null) return;
+        if (activeTouches.Count == 0) return;
 
         foreach (var touch in activeTouches)
         {
@@ -312,27 +389,39 @@ public class PlayerController : NetworkBehaviour
             if (IsTouchOverUI(touch.screenPosition)) continue;
 
             Vector2 worldPos = mainCam.ScreenToWorldPoint(touch.screenPosition);
-            var col = Physics2D.OverlapPoint(worldPos, enemyLayer);
-            if (col != null)
+            ProcessAttackClickAt(worldPos);
+            return; // 한 프레임에 한 터치만 처리
+        }
+    }
+
+    /// <summary>월드 좌표 클릭/터치를 평타 대상 지정 또는 타겟 해제로 변환.</summary>
+    private void ProcessAttackClickAt(Vector2 worldPos)
+    {
+        // [버그 수정] PlayerCharacter 프리팹의 Enemy Layer 가 "Nothing" 으로 설정되어 있으면
+        // OverlapPoint 가 아무것도 검출하지 못해 평타가 영원히 안 됨.
+        // enemyLayer 가 비어있으면 AllLayers 로 폴백 → 클릭 지점의 모든 콜라이더 검사 후
+        // PlayerController 컴포넌트 보유 여부로 적 판정 (안전).
+        LayerMask effectiveMask = enemyLayer.value != 0 ? enemyLayer : (LayerMask)Physics2D.AllLayers;
+
+        // 클릭 지점에 여러 콜라이더가 겹쳐있을 수 있어 OverlapPointAll 로 모두 검사.
+        var hits = Physics2D.OverlapPointAll(worldPos, effectiveMask);
+        foreach (var col in hits)
+        {
+            if (col == null) continue;
+            var enemy = col.GetComponent<PlayerController>();
+            if (enemy != null && !enemy.IsDead && enemy != this)
             {
-                var enemy = col.GetComponent<PlayerController>();
-                if (enemy != null && !enemy.IsDead && enemy != this)
-                {
-                    SetAttackTarget(enemy);
-                    return;
-                }
-            }
-            else
-            {
-                // 빈 곳 터치 → 자동 평타/추격 해제 (수동 취소)
-                if (_autoAttackCoroutine != null)
-                {
-                    StopCoroutine(_autoAttackCoroutine);
-                    _autoAttackCoroutine = null;
-                }
-                ClearTarget();
+                SetAttackTarget(enemy);
+                return;
             }
         }
+        // 적이 없으면 자동 평타/추격 해제 (수동 취소)
+        if (_autoAttackCoroutine != null)
+        {
+            StopCoroutine(_autoAttackCoroutine);
+            _autoAttackCoroutine = null;
+        }
+        ClearTarget();
     }
 
     // PointerEventData 기반 UI 히트 테스트 — New Input System과 호환
@@ -369,6 +458,9 @@ public class PlayerController : NetworkBehaviour
         _autoAttackCoroutine = StartCoroutine(AutoAttackRoutine(enemy));
     }
 
+    /// <summary>이 거리를 넘어가면 자동 추격을 포기하고 타겟 해제. 사용자가 조이스틱 입력 없이도 끊을 수 있도록.</summary>
+    private const float AutoChaseMaxDistance = 15f;
+
     private IEnumerator AutoAttackRoutine(PlayerController enemy)
     {
         while (true)
@@ -398,6 +490,37 @@ public class PlayerController : NetworkBehaviour
 
             // 2) 거리 계산
             float dist = Vector2.Distance(transform.position, enemy.transform.position);
+
+            // [신규] 추격 거리 제한 — 너무 멀어지면 자동 포기.
+            // 이전엔 일단 타겟이 잡히면 무한히 chase 가 활성화되어 사용자가 조이스틱 입력 없이
+            // 빈 곳을 클릭해야만 끊을 수 있었음. 에디터 테스트 / 모바일 조작 실수 모두 대응.
+            if (dist > AutoChaseMaxDistance)
+            {
+                ClearTarget();
+                yield break;
+            }
+
+            // [신규] 카메라 시야 밖으로 타겟이 사라지면 자동 포기.
+            // 거리 제한과 별개 — 거리상 가깝더라도 카메라가 다른 곳을 비추면 추격 중단.
+            // 모바일 UX: 화면 밖 적은 시각 정보 없이 추격하면 길 잃은 듯한 느낌. 자연스러운 자동 해제.
+            // IsLocalPlayer 만 적용 — 다른 클라이언트의 AutoAttackRoutine 은 자체 카메라 기준이 다름.
+            if (IsLocalPlayer && IsOwner)
+            {
+                if (mainCam == null) mainCam = Camera.main;
+                if (mainCam != null)
+                {
+                    Vector3 vp = mainCam.WorldToViewportPoint(enemy.transform.position);
+                    // 약간의 여유(-0.05~1.05) — 화면 가장자리 깜빡임 방지.
+                    bool offScreen = vp.z < 0f
+                                     || vp.x < -0.05f || vp.x > 1.05f
+                                     || vp.y < -0.05f || vp.y > 1.05f;
+                    if (offScreen)
+                    {
+                        ClearTarget();
+                        yield break;
+                    }
+                }
+            }
 
             if (dist <= attackRange)
             {
@@ -439,6 +562,15 @@ public class PlayerController : NetworkBehaviour
     // IsSilenced(IceShield), IsDead 등으로 RPC가 차단된 경우 false를 반환해 쿨다운을 막음.
     public bool UseSkill(int slotIndex)
     {
+#if UNITY_EDITOR
+        // 스킬 사용 흐름 진단 — 어느 PlayerController 인스턴스에서 호출됐는지 instanceID 까지 출력.
+        // skillCount=0 이면 더미가 localPlayer 로 잘못 등록된 것 → InGameHUD.InitPlayerUI 진입점 점검.
+        int skillCount = myData?.activeSkills?.Count ?? -1;
+        Debug.Log($"[PlayerController] UseSkill on {name} (instanceID={GetInstanceID()}, " +
+                  $"_isBot={_isBot}, IsOwner={IsOwner}): slot={slotIndex}, IsDead={IsDead}, " +
+                  $"myData={(myData != null ? "OK" : "NULL")}, skillCount={skillCount}, " +
+                  $"silenced={StatusFX?.IsSilenced ?? false}");
+#endif
         if (IsDead || myData == null || slotIndex >= myData.activeSkills.Count) return false;
         if (StatusFX.IsSilenced) return false; // 클라이언트 1차 검증
 
@@ -516,10 +648,57 @@ public class PlayerController : NetworkBehaviour
     /// <summary>스킬 이펙트/애니메이션 재생 — BroadcastSkillVisualsClientRpc에서 호출</summary>
     public void PlaySkillVisuals(ActiveSkillType skill, Vector2 targetPos)
     {
-        if (animator != null) animator.SetTrigger("Attack");
+        if (animator != null)
+        {
+            // [개선] 평타와 스킬을 동일한 "Attack" 트리거로 재생하면 직업별 고유 스킬 모션을
+            // 추가하기 어렵다. "Skill" 트리거를 우선 시도하고, 컨트롤러에 "Skill" 파라미터가
+            // 없거나 해당 직업이 스킬 전용 모션을 갖고 있지 않으면 자동으로 "Attack" 으로 폴백.
+            // SetTrigger 자체는 미정의 파라미터에 호출해도 경고 1회만 발생하고 게임에 영향 없음.
+            bool hasSkillParam = HasAnimatorParameter("Skill");
+            if (hasSkillParam) animator.SetTrigger("Skill");
+            else               animator.SetTrigger("Attack");
+
+#if UNITY_EDITOR
+            // 에디터에서 스킬 모션 디버깅 — 트리거 + 컨트롤러 + 현재 재생 상태까지 출력.
+            // "스킬 모션 안 보임" 신고 시 어디서 끊겼는지 빠르게 식별.
+            string ctrlName = animator.runtimeAnimatorController != null
+                ? animator.runtimeAnimatorController.name
+                : "null";
+            string currentState = "?";
+            if (animator.runtimeAnimatorController != null && animator.isInitialized)
+            {
+                var info = animator.GetCurrentAnimatorStateInfo(0);
+                currentState = info.fullPathHash.ToString();
+            }
+            Debug.Log($"[PlayerController] PlaySkillVisuals: skill={skill}, " +
+                      $"trigger={(hasSkillParam ? "Skill" : "Attack")}, " +
+                      $"controller={ctrlName}, animatorEnabled={animator.enabled}, " +
+                      $"stateHash={currentState}");
+#endif
+        }
         AudioManager.Instance?.PlaySkillSound(skill);
         // TODO: skill 타입별 파티클 Instantiate
-        // 예: if (skill == ActiveSkillType.Fireball) Instantiate(fireballVfxPrefab, transform.position, Quaternion.identity);
+    }
+
+    /// <summary>현재 Animator Controller에 지정 파라미터가 존재하는지 안전하게 확인합니다.</summary>
+    private bool HasAnimatorParameter(string name)
+    {
+        if (animator == null || animator.runtimeAnimatorController == null) return false;
+        foreach (var p in animator.parameters)
+            if (p.name == name) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// 피격 모션 재생. NotifyHitClientRpc 에서 호출됨.
+    /// 컨트롤러에 "Hurt" 트리거가 있을 때만 동작 — 미정의 직업은 무시.
+    /// 사망(Die) 우선 / 회피·블록 시에는 호출하지 않음 (호출자 책임).
+    /// </summary>
+    public void PlayHurtAnimation()
+    {
+        if (IsDead || animator == null) return;
+        if (!HasAnimatorParameter("Hurt")) return;
+        animator.SetTrigger("Hurt");
     }
 
     public void ShowDotPopup(float dmg, Color color)
@@ -633,7 +812,13 @@ public class PlayerController : NetworkBehaviour
 
     private void UpdateAnimation()
     {
-        if (animator == null) return;
+        // [버그 수정] 이전 코드는 `if (animator == null) return;` 으로 즉시 종료하여
+        // animator 컴포넌트가 없는 캐릭터는 spriteRenderer.flipX 가 갱신되지 않아
+        // 항상 오른쪽을 바라보는 버그가 있었음.
+        // 코드 상단 line 217~222 주석에 "모든 플레이어에 대해 UpdateAnimation()을 호출.
+        // flipX는 moveDir(Owner) 또는 networkSync.NetworkMoveDir(비Owner)을 기준으로 갱신."
+        // 이라 명시되어 있어 의도와 불일치. animator 사용은 선택적으로 처리하고
+        // flipX 갱신은 spriteRenderer 가 있으면 항상 실행되도록 변경.
 
         // 비Owner: networkSync를 통해 서버에서 동기화된 이동 방향을 사용
         Vector2 displayDir = IsOwner
@@ -641,7 +826,11 @@ public class PlayerController : NetworkBehaviour
             : (networkSync != null ? networkSync.NetworkMoveDir.Value : Vector2.zero);
 
         bool displayChasing = IsOwner ? isChasing : NetworkIsChasing.Value;
-        animator.SetBool("IsMoving", displayDir.sqrMagnitude > 0.01f || displayChasing);
+
+        // animator 는 선택적 — 없어도 flipX 는 계속 갱신되어야 함.
+        if (animator != null)
+            animator.SetBool("IsMoving", displayDir.sqrMagnitude > 0.01f || displayChasing);
+
         if (spriteRenderer == null) return;
         if      (displayDir.x > 0.05f)  spriteRenderer.flipX = false;
         else if (displayDir.x < -0.05f) spriteRenderer.flipX = true;

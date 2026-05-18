@@ -20,8 +20,12 @@ public class InGameManager : MonoBehaviour
 
     // ── 매치 전체에서 공유되는 부활권 제한 ────────────────────
     /// <summary>한 매치에서 전체 플레이어가 공유하는 최대 부활 횟수.
-    /// GameBalanceConfig.ReviveMaxPerMatch가 단일 소스이며, Inspector에서 조정 가능.</summary>
-    public static int MaxMatchReviveCount => GameBalanceConfig.Get().ReviveMaxPerMatch;
+    /// GameBalanceConfig.ReviveMaxPerMatch가 단일 소스이며, Inspector에서 조정 가능.
+    /// [버그 수정] Resources/GameBalanceConfig.asset이 누락되면 GameBalanceConfig.Get()이 null을 반환하는데
+    /// 기존 코드는 그대로 .ReviveMaxPerMatch에 접근하여 NullReferenceException 발생.
+    /// CanOfferRevive / InGameHUD / 킬피드 등 모든 호출 지점이 매번 크래시하여 부활 시스템 전체가 마비됨.
+    /// → null-conditional + 기본값 3 으로 안전하게 폴백.</summary>
+    public static int MaxMatchReviveCount => GameBalanceConfig.Get()?.ReviveMaxPerMatch ?? 3;
 
     [Header("Game Settings")]
     public int minPlayers = 2;
@@ -35,6 +39,11 @@ public class InGameManager : MonoBehaviour
     public float timeLimitSeconds = 0f;
 
     public bool isGameActive { get; private set; } = false;
+
+    /// <summary>게임이 종료 처리에 들어갔는지 여부.
+    /// surrender / 외부 컴포넌트에서 사후 입력 차단 판단용 (Public read-only).
+    /// FinishGame 진입 시 true 로 전환되며, 이후 ResultScene 전환까지 유지된다.</summary>
+    public bool IsGameEnded => gameEnded;
 
     /// <summary>
     /// 실제로 매치에 참가한 시작 인원 수.
@@ -92,14 +101,18 @@ public class InGameManager : MonoBehaviour
 
     private void Start()
     {
-        // [FIX] NGO 씬 로드 시 NetworkObject가 InGameManager(일반 객체)보다 먼저 스폰되거나, 
-        // 반대로 살짝 늦게 스폰되는 타이밍 이슈를 방어하기 위해 지연 등록 루틴 실행
-        StartCoroutine(DelayedInitialRegistration());
-
         // 게임 시작 카운트다운은 서버가 단독으로 주도합니다.
         // 순수 클라이언트는 NetworkSpawnManager.NotifyGameStartedClientRpc 수신 후 시작 상태로 전환됩니다.
         var netMgr = Unity.Netcode.NetworkManager.Singleton;
-        
+
+        // [버그 수정 R2-7] DelayedInitialRegistration이 클라이언트에서도 실행돼
+        // 모든 원격 PlayerController에 SetMovementLocked(true)를 호출 → moveDir/isChasing 초기화로
+        // 시각 동기화가 일시적으로 깨졌음. 서버 권한 등록은 서버 전용이어야 함.
+        // [FIX] NGO 씬 로드 시 NetworkObject가 InGameManager(일반 객체)보다 먼저 스폰되거나,
+        // 반대로 살짝 늦게 스폰되는 타이밍 이슈를 방어하기 위해 지연 등록 루틴 실행
+        if (netMgr != null && netMgr.IsServer)
+            StartCoroutine(DelayedInitialRegistration());
+
         // [FIX] IsListening 조건 제거: 씬 로드 타이밍에 따라 IsListening이 false일 때 클라이언트가 서버 코루틴을 실행하는 버그 방지
         // BUG-08: NetworkManager.Singleton == null인 경우(씬 로드 타이밍이 NGO 초기화보다 빠를 때)에도
         // 서버 전용 GameStartSequence가 클라이언트에서 실행되는 것을 차단.
@@ -150,7 +163,12 @@ public class InGameManager : MonoBehaviour
                 // 0초 도달 시 게임 종료
                 // [Fix] timeLimitSeconds == 0 은 "무제한" 의미. 가드 없이는 게임 시작 직후
                 // remaining=0이 되어 즉시 FinishGame이 호출되는 치명 버그가 발생한다.
-                if (timeLimitSeconds > 0f && remaining <= 0f && !gameEnded)
+                // [버그 수정 R2-3] FinishGame은 ClientRpc를 호출하므로 서버에서만 실행되어야 함.
+                // 클라이언트에서 호출 시 NGO가 NotServerException을 던져 결과 처리가 깨지고
+                // 클라이언트가 단독으로 ResultScene으로 이동해 stale 결과를 표시함.
+                var netMgr = Unity.Netcode.NetworkManager.Singleton;
+                if (timeLimitSeconds > 0f && remaining <= 0f && !gameEnded
+                    && netMgr != null && netMgr.IsServer)
                 {
                     gameEnded = true;
                     // 시간 초과 시 생존자 중 HP가 가장 높은 플레이어를 승자로 처리

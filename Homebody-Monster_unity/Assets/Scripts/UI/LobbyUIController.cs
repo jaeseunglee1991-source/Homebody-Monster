@@ -139,14 +139,9 @@ public class LobbyUIController : MonoBehaviour
             MatchmakingManager.Instance.OnMatchFound           += HandleMatchFound;
             MatchmakingManager.Instance.OnMatchmakingFailed    += HandleMatchmakingFailed;
 
-            // [Fix #8] MatchmakingUX — ip/port 페이로드 이벤트 연결
-            // OnMatchFound(string, ushort): 매칭 성공 시 카운트다운 + 씬 전환 처리
-            // OnMatchFailed(string):        매칭 실패/취소 시 UX 정리
-            if (matchmakingUX != null)
-            {
-                MatchmakingManager.Instance.OnMatchFound  += matchmakingUX.OnMatchFound;
-                MatchmakingManager.Instance.OnMatchFailed += matchmakingUX.OnMatchFailed;
-            }
+            // [버그 수정 R2-1] MatchmakingUX는 자체 Start에서 동일 이벤트를 구독한다.
+            // 여기서 추가로 등록하면 OnMatchFound가 두 번 발화돼 카운트다운/접속이 이중 실행됨.
+            // (MatchmakingUX.cs:85 → OnMatchFound, :86 → OnMatchmakingFailed)
         }
 
         if (timerSlider != null)
@@ -358,12 +353,7 @@ public class LobbyUIController : MonoBehaviour
             MatchmakingManager.Instance.OnStatusMessageChanged -= HandleStatusChanged;
             MatchmakingManager.Instance.OnMatchFound           -= HandleMatchFound;
             MatchmakingManager.Instance.OnMatchmakingFailed    -= HandleMatchmakingFailed;
-
-            if (matchmakingUX != null)
-            {
-                MatchmakingManager.Instance.OnMatchFound  -= matchmakingUX.OnMatchFound;
-                MatchmakingManager.Instance.OnMatchFailed -= matchmakingUX.OnMatchFailed;
-            }
+            // [버그 수정 R2-1] MatchmakingUX 자체 OnDisable에서 구독 해제하므로 여기서는 처리하지 않는다.
         }
     }
 

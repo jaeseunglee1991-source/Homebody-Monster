@@ -245,7 +245,7 @@ public class StatusEffectSystem : MonoBehaviour
                 // [버그 수정] IceShield 만료 시 다른 잠금 효과(Stun/Root) 무시하고
                 // 이동/공격 잠금을 풀어버리는 버그. 다른 활성 잠금 확인 후 해제.
                 if (!IsRooted && !IsStunned) owner.SetMovementLocked(false);
-                owner.SetAttackLocked(false); break;
+                if (!IsStunned) owner.SetAttackLocked(false); break;
             case StatusEffectType.Stealth:
                 if (owner.myData != null) owner.myData.stealthFirstAttack = false;
                 SetSpriteAlpha(1f); break;
@@ -330,7 +330,16 @@ public class StatusEffectSystem : MonoBehaviour
 
     private void SetSpriteAlpha(float a)
     {
-        var sr = GetComponent<SpriteRenderer>();
+        // [버그 수정] 기존 GetComponent<SpriteRenderer>()는 StatusEffectSystem이 부착된 root GameObject
+        // (PlayerCharacter)에서만 컴포넌트를 찾았으나, 실제 SpriteRenderer는 자식(Circle/직업별 스프라이트
+        // 오브젝트)에 위치하므로 항상 null 반환 → 은신(Stealth) 알파 효과가 시각적으로 적용되지 않는 버그.
+        //
+        // 1순위: PlayerController.spriteRenderer 직렬화 참조 사용 (Inspector에서 정확히 지정된 SR)
+        // 2순위: GetComponentInChildren<SpriteRenderer>() 폴백 — 자식 오브젝트에 SR이 있는 경우
+        //        Inspector 미설정 환경(테스트 씬 등)에서도 동작하도록 안전망 제공.
+        // PlayerVisibility.SetVisible 도 _pc.spriteRenderer 를 사용하므로 동일 참조로 통일 → 색/alpha 일관성 보장.
+        var sr = owner != null ? owner.spriteRenderer : null;
+        if (sr == null) sr = GetComponentInChildren<SpriteRenderer>(true);
         if (sr == null) return;
         var col = sr.color; col.a = a; sr.color = col;
     }

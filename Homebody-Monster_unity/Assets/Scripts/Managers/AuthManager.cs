@@ -365,10 +365,12 @@ public class AuthManager : MonoBehaviour
         // 금칙어 체크
         // L-5: 닉네임은 정확 일치 비교(NicknameExactBlockList)로 "Masterpiece"·"Administrator" 등 정상 닉네임 차단을 막고,
         // 욕설(`List`)은 부분 문자열로 회피 어렵게 유지.
-        string lowerName = newName.ToLower();
+        // [버그 수정 R2-2] Turkish 등 culture-sensitive locale에서 'I'.ToLower()가 'ı'(dotless)로
+        // 변환되어 'i' 포함 금칙어 비교를 우회하던 문제. ToLowerInvariant로 통일.
+        string lowerName = newName.ToLowerInvariant();
         foreach (string word in ForbiddenWords.NicknameExactBlockList)
         {
-            if (lowerName == word.ToLower())
+            if (lowerName == word.ToLowerInvariant())
             {
                 ShowError("사용할 수 없는 닉네임입니다.");
                 return;
@@ -379,7 +381,7 @@ public class AuthManager : MonoBehaviour
             // 한글/영문 욕설은 길이가 충분하므로 Contains 유지 (회피 방지)
             // 단, 영문 일반어 충돌 위험이 큰 짧은 단어는 NicknameExactBlockList로 분리됨.
             if (word.Length < 4) continue; // admin/gm/master/system/fuck 등은 위에서 정확 일치만 차단
-            if (lowerName.Contains(word.ToLower()))
+            if (lowerName.Contains(word.ToLowerInvariant()))
             {
                 ShowError("사용할 수 없는 닉네임입니다.");
                 return;

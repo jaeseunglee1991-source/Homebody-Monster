@@ -11,8 +11,35 @@ MonoBehaviour:
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 42ebce299bc34ad458dcaa659141e47b, type: 3}
   m_Name: JobVisualRegistry
-  m_EditorClassIdentifier:
+  m_EditorClassIdentifier: 
   visuals:
   - job: 0
     animatorController: {fileID: 9100000, guid: 6096e0a624bd79b489ace7af3f7ca75f, type: 2}
     defaultSprite: {fileID: 5692671443236587484, guid: 16c180edcea552341a47570628259d20, type: 3}
+  - job: 5
+    animatorController: {fileID: 9100000, guid: af437c72273219648a1e9d6e4701ddcb, type: 2}
+    defaultSprite: {fileID: 5420657165879536120, guid: cd3359cfffa9fb6419e2b8c80c4b8b27, type: 3}
+  - job: 1
+    animatorController: {fileID: 9100000, guid: 4a897ad734dffbb488505bbbc0db0772, type: 2}
+    defaultSprite: {fileID: -2875184811977189179, guid: eb4ea825f05f47f41ab0021d862d168c, type: 3}
+  - job: 2
+    animatorController: {fileID: 9100000, guid: 3acaa09298a66824ab53a6b68f5a21b2, type: 2}
+    defaultSprite: {fileID: 941554769194238170, guid: 1961130746991c0448413f2d836e0468, type: 3}
+  - job: 3
+    animatorController: {fileID: 9100000, guid: c7d3da661bb0c2649bd91f5b3d1b397e, type: 2}
+    defaultSprite: {fileID: -2178845191466743114, guid: bc209213971897c4aba554cc84cc1793, type: 3}
+  - job: 4
+    animatorController: {fileID: 9100000, guid: 87f9ce4b7eba8534eab69f744b7de47a, type: 2}
+    defaultSprite: {fileID: -5908238798454654921, guid: b877216a0728be84faf9e7a383333ba1, type: 3}
+  - job: 6
+    animatorController: {fileID: 9100000, guid: 431964afe7fd12544a44bae13aa53fbb, type: 2}
+    defaultSprite: {fileID: -663804655798916631, guid: d2672f6dff1f6fa4a90f77f48f182233, type: 3}
+  - job: 7
+    animatorController: {fileID: 9100000, guid: 40e8473f5ee653841976a53b42d3197f, type: 2}
+    defaultSprite: {fileID: 4565372846758268570, guid: dd9ea893297980248826a8c548ae86b5, type: 3}
+  - job: 8
+    animatorController: {fileID: 9100000, guid: cd777a98f034a1d449b436a1be3b2b07, type: 2}
+    defaultSprite: {fileID: -342681156859825065, guid: 9ffa5a1816608874cb61c8209d637e45, type: 3}
+  - job: 9
+    animatorController: {fileID: 9100000, guid: 245bae37dec61ed42927d86ece8a602c, type: 2}
+    defaultSprite: {fileID: 3465079563596065642, guid: b212aee11e2969349914af44f13e818a, type: 3}

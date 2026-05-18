@@ -53,7 +53,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Unity.Netcode.Runtime::Unity.Netcode.NetworkObject
-  GlobalObjectIdHash: 3123732072
+  GlobalObjectIdHash: 1333719137
   InScenePlacedSourceGlobalObjectIdHash: 0
   DeferredDespawnTick: 0
   Ownership: 1
@@ -224,14 +224,14 @@ MonoBehaviour:
     currentHp: 0
     baseAtk: 0
     moveSpeed: 0
+    attackCooldown: 0.8
   movementJoystick: {fileID: 0}
   attackRange: 1.8
-  attackCooldown: 0.8
   enemyLayer:
     serializedVersion: 2
     m_Bits: 0
-  spriteRenderer: {fileID: 0}
-  animator: {fileID: 0}
+  spriteRenderer: {fileID: 4061568506795827684}
+  animator: {fileID: 6849753224012788279}
   trapVisualPrefab: {fileID: 0}
 --- !u!114 &-516533588603172846
 MonoBehaviour:
@@ -281,6 +281,7 @@ GameObject:
   m_Component:
   - component: {fileID: 4438198049199048500}
   - component: {fileID: 4061568506795827684}
+  - component: {fileID: 6849753224012788279}
   m_Layer: 0
   m_Name: Circle
   m_TagString: Untagged
@@ -362,3 +363,25 @@ SpriteRenderer:
   m_SpriteTileMode: 0
   m_WasSpriteAssigned: 1
   m_SpriteSortPoint: 0
+--- !u!95 &6849753224012788279
+Animator:
+  serializedVersion: 7
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3607358072939524198}
+  m_Enabled: 1
+  m_Avatar: {fileID: 0}
+  m_Controller: {fileID: 0}
+  m_CullingMode: 0
+  m_UpdateMode: 0
+  m_ApplyRootMotion: 0
+  m_LinearVelocityBlending: 0
+  m_StabilizeFeet: 0
+  m_AnimatePhysics: 0
+  m_WarningMessage: 
+  m_HasTransformHierarchy: 1
+  m_AllowConstantClipSamplingOptimization: 1
+  m_KeepAnimatorStateOnDisable: 0
+  m_WriteDefaultValuesOnDisable: 0

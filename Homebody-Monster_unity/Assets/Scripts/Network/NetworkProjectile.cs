@@ -76,6 +76,14 @@ public class NetworkProjectile : NetworkBehaviour
         // 1. 발사자 본인과의 충돌 무시
         if (targetSync != null && targetSync.OwnerClientId == _ownerSync.OwnerClientId) return;
 
+        // [버그 수정 R2-4] 죽은 플레이어 사체 충돌 시 즉시 소멸.
+        // 이전: 어느 분기에도 매칭 안 되어 투사체가 사체를 관통해 뒷 플레이어를 피격하는 시각/판정 불일치.
+        if (targetSync != null && targetSync.NetworkIsDead.Value)
+        {
+            DespawnProjectile();
+            return;
+        }
+
         // 2. 살아있는 적 플레이어 피격 처리
         if (targetSync != null && !targetSync.NetworkIsDead.Value)
         {

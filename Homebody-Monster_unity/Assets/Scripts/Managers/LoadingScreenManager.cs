@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.SceneManagement;
+using UnityEngine.InputSystem;
 using TMPro;
 using System.Collections;
 
@@ -70,7 +71,7 @@ public class LoadingScreenManager : MonoBehaviour
         { "LobbyScene",  "로비로 이동 중..."  },
         { "InGameScene", "배틀 준비 중..."    },
         { "ResultScene", "결과 집계 중..."    },
-        { "LoginScene",  "로그인 화면으로..." },
+        { "Login_Scene", "로그인 화면으로..." },
     };
 
     private static string _pendingScene    = null;
@@ -161,8 +162,19 @@ public class LoadingScreenManager : MonoBehaviour
     {
         if (!autoActivate && _readyToActivate)
         {
-            if (Input.GetMouseButtonDown(0) ||
-                (Input.touchCount > 0 && Input.GetTouch(0).phase == TouchPhase.Began))
+            // [버그 수정] Legacy Input 클래스 사용 → Unity 6 + New Input System Only(activeInputHandler=2)에서
+            // 매 프레임 InvalidOperationException("You are trying to read Input using the UnityEngine.Input class...")
+            // 발생. autoActivate=false 모드에서 로딩 완료 후 탭하여 진행 시 영구히 진행 불가.
+            //
+            // 코드베이스 다른 파일들은 모두 Keyboard.current / EnhancedTouch / Mouse.current 등 New Input API를
+            // 사용하지만 LoadingScreenManager만 누락되어 있어 일관성도 깨짐.
+            //
+            // 수정: Mouse.current.leftButton 과 Touchscreen.current.primaryTouch.press 로 마이그레이션.
+            //       EnhancedTouchSupport 없이 동작하는 저수준 API로 LoadingScene의 단순 탭 감지에 충분.
+            //       null-conditional 로 마우스 미지원 모바일·터치 미지원 데스크탑 둘 다 안전.
+            bool clickedMouse = Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame;
+            bool tappedTouch  = Touchscreen.current != null && Touchscreen.current.primaryTouch.press.wasPressedThisFrame;
+            if (clickedMouse || tappedTouch)
             {
                 _readyToActivate = false;
                 if (tapToContinueObj != null) tapToContinueObj.SetActive(false);
