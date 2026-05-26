@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 1498c0887ffc43d4a42b7fd0d673a966
+timeCreated: 1597396789
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/TooltipInfo/ITooltipPointer.cs
+  uploadId: 452711

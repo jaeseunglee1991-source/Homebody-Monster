@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: a771616732fd4f90adc670eb508f6907
+timeCreated: 1585306412
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/Decorators/ColorDecoratorForText.cs
+  uploadId: 452711

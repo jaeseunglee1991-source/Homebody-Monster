@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 4aaed7f0fe0843bb96d5ccb3213fa476
+timeCreated: 1585570957
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Prototype/SharpList/CustomItemHolder.cs
+  uploadId: 452711

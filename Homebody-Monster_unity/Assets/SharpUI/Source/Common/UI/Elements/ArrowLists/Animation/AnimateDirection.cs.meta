@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 2c5a528f932f49b98b7c9bef0930232e
+timeCreated: 1597745224
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/ArrowLists/Animation/AnimateDirection.cs
+  uploadId: 452711

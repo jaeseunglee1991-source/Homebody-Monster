@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 25d9bfb8d3b94aa085606ae65f18db11
+timeCreated: 1598354421
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Tests/SharpUI/Client/UI/User/CharacterCreate/ArrowListAdapters/BioColorTests.cs
+  uploadId: 452711

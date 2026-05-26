@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: ccecbd869d224e15b8c0dda2e2bd269a
+timeCreated: 1598034832
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/Decorators/VisibilityDecorator.cs
+  uploadId: 452711

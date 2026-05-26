@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 8ee3b09d769841f6823e1585a54e4337
+timeCreated: 1585351391
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/Button/IconButton.cs
+  uploadId: 452711

@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 04925bb006164193be3b3107346b96ba
+timeCreated: 1598355933
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Tests/SharpUI/Client/UI/User/CharacterCreate/ArrowListAdapters/DefaultStyleTests.cs
+  uploadId: 452711

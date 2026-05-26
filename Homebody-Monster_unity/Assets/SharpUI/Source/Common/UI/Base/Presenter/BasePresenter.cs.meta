@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: e27d15a2a6ec4c15b96c1792a0fe8437
+timeCreated: 1582485672
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Base/Presenter/BasePresenter.cs
+  uploadId: 452711

@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 6eb5d625989d4c8fb3ab270163bae2ee
+timeCreated: 1597744208
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/ArrowLists/Animation/ArrowListAnimator.cs
+  uploadId: 452711

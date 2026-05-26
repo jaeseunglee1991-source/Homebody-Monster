@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: cd6faea1836645519282f32cf9a79349
+timeCreated: 1599906929
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Util/TimeUtils/ITimeFormatter.cs
+  uploadId: 452711

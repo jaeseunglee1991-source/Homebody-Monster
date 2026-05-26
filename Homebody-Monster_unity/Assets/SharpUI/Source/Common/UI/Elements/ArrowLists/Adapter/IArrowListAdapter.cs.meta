@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: bd6f2f3a59654eee95428a97ce199fd5
+timeCreated: 1597607341
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/ArrowLists/Adapter/IArrowListAdapter.cs
+  uploadId: 452711

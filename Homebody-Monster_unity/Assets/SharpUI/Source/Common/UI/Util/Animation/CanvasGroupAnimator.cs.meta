@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: b72ff1bad3f94b12a974fe06b518cd8a
+timeCreated: 1599211573
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Util/Animation/CanvasGroupAnimator.cs
+  uploadId: 452711

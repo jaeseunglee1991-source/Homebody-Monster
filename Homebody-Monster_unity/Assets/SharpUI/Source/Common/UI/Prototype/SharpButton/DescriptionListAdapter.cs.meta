@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: f59d23f936fc4565891d0bb69f11a52f
+timeCreated: 1585520864
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Prototype/SharpButton/DescriptionListAdapter.cs
+  uploadId: 452711

@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 84c90f93ab7043dfb1acd10ddcd077cb
+timeCreated: 1599601175
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/SkillTrees/SkillArrowLine.cs
+  uploadId: 452711

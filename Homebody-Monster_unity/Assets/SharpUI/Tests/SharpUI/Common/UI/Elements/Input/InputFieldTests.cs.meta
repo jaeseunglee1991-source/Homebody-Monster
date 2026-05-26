@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 4150880137f14a338fb2cb6a42828e75
+timeCreated: 1594371615
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Tests/SharpUI/Common/UI/Elements/Input/InputFieldTests.cs
+  uploadId: 452711

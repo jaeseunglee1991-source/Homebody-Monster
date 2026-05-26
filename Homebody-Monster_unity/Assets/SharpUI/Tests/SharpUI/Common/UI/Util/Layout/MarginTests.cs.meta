@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 497df3ee832b4f70af442f6385e7ccfa
+timeCreated: 1600337664
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Tests/SharpUI/Common/UI/Util/Layout/MarginTests.cs
+  uploadId: 452711

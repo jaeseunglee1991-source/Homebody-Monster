@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: be946a06e54f48c3a0e9a00d27ffac94
+timeCreated: 1596022215
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Tests/SharpUI/Client/UI/User/Register/RegisterModelTests.cs
+  uploadId: 452711

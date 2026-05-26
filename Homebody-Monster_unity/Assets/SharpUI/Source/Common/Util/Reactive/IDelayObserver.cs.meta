@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: e45d34ed545645ef841816ee80b2bbc9
+timeCreated: 1597867911
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/Util/Reactive/IDelayObserver.cs
+  uploadId: 452711

@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 85e31383ae9b47d08c289fbd9c834406
+timeCreated: 1598652857
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/DropDowns/Adapters/DefaultDropDownAdapter.cs
+  uploadId: 452711

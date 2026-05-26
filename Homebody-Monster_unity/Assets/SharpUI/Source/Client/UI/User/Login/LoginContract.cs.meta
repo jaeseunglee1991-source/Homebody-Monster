@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 6838d68126a24b029f06b69dbdc65553
+timeCreated: 1582494176
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Client/UI/User/Login/LoginContract.cs
+  uploadId: 452711

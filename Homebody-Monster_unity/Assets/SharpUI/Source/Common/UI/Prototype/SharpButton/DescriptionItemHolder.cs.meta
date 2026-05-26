@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: adbf701268f9470a92808572a84b493a
+timeCreated: 1585520936
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Prototype/SharpButton/DescriptionItemHolder.cs
+  uploadId: 452711

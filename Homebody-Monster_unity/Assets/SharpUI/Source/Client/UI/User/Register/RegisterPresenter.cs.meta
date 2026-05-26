@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 1795ecf1e0984178ac91b8c379f27f42
+timeCreated: 1582460681
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Client/UI/User/Register/RegisterPresenter.cs
+  uploadId: 452711

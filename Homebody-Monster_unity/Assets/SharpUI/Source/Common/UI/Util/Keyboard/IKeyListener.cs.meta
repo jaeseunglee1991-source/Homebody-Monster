@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 2a2e7d69072a423d97953a34f76ff0eb
+timeCreated: 1600378491
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Util/Keyboard/IKeyListener.cs
+  uploadId: 452711

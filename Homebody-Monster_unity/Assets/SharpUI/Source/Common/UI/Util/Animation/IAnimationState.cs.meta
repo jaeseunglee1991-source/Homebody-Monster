@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: db59901e509e4facb86ffb1de0c40f47
+timeCreated: 1599220954
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Util/Animation/IAnimationState.cs
+  uploadId: 452711

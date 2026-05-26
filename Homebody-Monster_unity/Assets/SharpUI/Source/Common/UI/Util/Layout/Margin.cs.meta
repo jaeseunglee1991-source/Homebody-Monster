@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 6db95e4b0c0d4aadba88651b7426c9b0
+timeCreated: 1597144135
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Util/Layout/Margin.cs
+  uploadId: 452711

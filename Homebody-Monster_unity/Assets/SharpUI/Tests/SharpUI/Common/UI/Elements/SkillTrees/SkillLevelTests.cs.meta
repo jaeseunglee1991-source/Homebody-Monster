@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 03f377fc097245e2a5ed5a3d45a5bd1d
+timeCreated: 1600343124
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Tests/SharpUI/Common/UI/Elements/SkillTrees/SkillLevelTests.cs
+  uploadId: 452711

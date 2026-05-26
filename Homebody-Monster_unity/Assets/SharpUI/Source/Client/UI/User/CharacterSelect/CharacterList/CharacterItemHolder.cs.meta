@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 8d9d49ad043f4a9e87b2ae998a4e7499
+timeCreated: 1585078797
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Client/UI/User/CharacterSelect/CharacterList/CharacterItemHolder.cs
+  uploadId: 452711

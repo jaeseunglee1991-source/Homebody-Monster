@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 78d58b61e8cf4b3492b6af1b51f5e6d2
+timeCreated: 1599772968
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/Drag/Draggable.cs
+  uploadId: 452711

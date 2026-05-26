@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 45cc24c4b2aa4e1b86fe68e5c3ad65e7
+timeCreated: 1584090110
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Client/UI/User/CharacterSelect/CharacterSelectPresenter.cs
+  uploadId: 452711

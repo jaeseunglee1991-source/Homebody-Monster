@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 91c3699c12184711937c7f16c88334f0
+timeCreated: 1598814345
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/Notifications/Notification.cs
+  uploadId: 452711

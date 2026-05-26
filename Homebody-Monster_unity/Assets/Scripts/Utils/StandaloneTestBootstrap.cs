@@ -49,10 +49,17 @@ public class StandaloneTestBootstrap : MonoBehaviour
              "테스트 가시성 위해 200 권장. 죽는 게 싫으면 1000~2000 정도.")]
     public float   dummyMaxHp = 200f;
     public float   dummyBaseAtk = 1f;
-    [Tooltip("폴백용 — NSM 스폰 포인트가 모자라거나 미설정일 때 본인 기준 원형 배치 반경. 현재 맵 스케일(±500u)에 맞춰 큼지막하게.")]
-    public float   dummyRadius = 80f;
-    [Tooltip("켜면 NetworkSpawnManager 의 spawnPoints 를 우선 사용하여 더미를 분산 배치. 끄면 무조건 본인 주변 원형.")]
+    [Tooltip("폴백용 — NSM 스폰 포인트가 모자라거나 미설정일 때만 본인 기준 원형 배치 반경. " +
+             "현재 아레나 플레이 영역(±15u)에 맞춰 작게 설정. 너무 크면 벽 밖으로 스폰됨.")]
+    public float   dummyRadius = 5f;
+    [Tooltip("켜면 NetworkSpawnManager 의 spawnPoints 를 우선 사용하여 더미를 분산 배치. " +
+             "실 매치와 동일한 스폰 경로를 사용하려면 반드시 ON 유지. " +
+             "OFF 시 본인 주변 원형 배치 — 디버그 전용.")]
     public bool    useNetworkSpawnPoints = true;
+    [Tooltip("실 매치와 동일한 스폰 경로 강제. " +
+             "Inspector 에서 useNetworkSpawnPoints 가 꺼져 있어도 런타임에 강제 ON. " +
+             "테스트 환경이 실제 환경과 동일하게 동작하도록 보장.")]
+    public bool    enforceProductionSpawnFlow = true;
 
     [Header("디버그 편의")]
     [Tooltip("ServerValidator(안티치트)를 비활성. 매칭 시작 시 위치 보정으로 인한 '속도핵 감지' 오탐 + 위치 롤백 방지.")]
@@ -149,10 +156,32 @@ public class StandaloneTestBootstrap : MonoBehaviour
             Log("Host 시작 완료.");
         }
 
+        // 본인 플레이어 스폰 + NetworkSpawnManager 초기화 대기.
+        // (더미 유무와 무관하게 안전망을 한 번 돌려야 하므로 dummyCount==0 케이스도 포함)
+        yield return new WaitForSeconds(2f);
+
+        // [진단] InGameArenaSetup 미실행 감지.
+        // 정상 셋업 후 NSM 은 (0, 0, 0) 근처여야 함. 픽셀 좌표(수백 u) 면 옛 셋업 잔재.
+        var nsmCheck = NetworkSpawnManager.Instance;
+        if (nsmCheck != null)
+        {
+            Vector3 nsmPos = nsmCheck.transform.position;
+            if (Mathf.Abs(nsmPos.x) > 50f || Mathf.Abs(nsmPos.y) > 50f)
+            {
+                Debug.LogError("[StandaloneTest] ⚠ NetworkSpawnManager 가 비정상 좌표 " +
+                               $"({nsmPos.x:F0}, {nsmPos.y:F0}) 에 있습니다. " +
+                               "Tools → Homebody Monster → Setup InGame Arena 를 실행하고 씬을 저장하세요. " +
+                               "이대로 두면 실 매치에서도 동일한 문제(카메라가 배경 밖을 비춤) 발생.");
+            }
+        }
+
+        // [테스트 안전망] 로컬 플레이어가 ArenaBounds 밖에 스폰됐다면 안쪽으로 텔레포트.
+        // 출시 영향: 없음 — StandaloneTestBootstrap 은 매칭 흐름 감지 시 Awake 에서 자동 비활성.
+        // 셋업 누락/씬 미저장/Undo 등으로 좌표가 어긋나도 단독 테스트만큼은 동작하도록 보장.
+        TeleportLocalPlayerIfOutsideArena();
+
         if (dummyCount > 0)
         {
-            // 본인 플레이어 스폰 + NetworkSpawnManager 초기화 대기.
-            yield return new WaitForSeconds(2f);
             SpawnDummies();
         }
 
@@ -228,9 +257,26 @@ public class StandaloneTestBootstrap : MonoBehaviour
         if (me != null) origin = (Vector2)me.transform.position;
 
         // [개선] NetworkSpawnManager.GetNextSpawnPoint() 우선 사용.
-        // 인게임씬의 spawnPoints(Point1~Point8)는 ±500u 범위로 분산되어 있어
-        // 현재 맵 스케일에 적합. 폴백은 본인 주변 80u 원형 배치.
-        bool useNSM = useNetworkSpawnPoints && nsm.spawnPoints != null && nsm.spawnPoints.Length > 0;
+        // spawnPoints (Point1~PointN) 는 InGameArenaSetup 에서 플레이 영역 내부에 자동 배치됨.
+        // 폴백은 본인 주변 dummyRadius 원형 배치 — NSM 미설정 시에만 사용 (안전망).
+        // [실제 환경 동일성 보장] enforceProductionSpawnFlow == true 면
+        //   Inspector 의 useNetworkSpawnPoints 체크가 꺼져 있어도 강제 ON.
+        //   매칭 흐름은 항상 NSM 을 사용하므로, 테스트도 동일 경로를 타도록 강제.
+        bool nsmReady = nsm.spawnPoints != null && nsm.spawnPoints.Length > 0;
+        if (enforceProductionSpawnFlow && !useNetworkSpawnPoints && nsmReady)
+        {
+            Debug.LogWarning("[StandaloneTest] enforceProductionSpawnFlow=ON → " +
+                             "useNetworkSpawnPoints 가 OFF 였지만 런타임에 강제 ON. " +
+                             "실 매치와 동일한 NSM 스폰 경로 사용.");
+            useNetworkSpawnPoints = true;
+        }
+        bool useNSM = useNetworkSpawnPoints && nsmReady;
+        if (!useNSM)
+        {
+            Debug.LogWarning($"[StandaloneTest] NSM 스폰 우회 (useNetworkSpawnPoints={useNetworkSpawnPoints}, " +
+                             $"spawnPoints={(nsm.spawnPoints != null ? nsm.spawnPoints.Length.ToString() : "null")}). " +
+                             $"본인 주변 원형(반경 {dummyRadius}u) 폴백 사용. 실 매치와 다른 경로임을 유의.");
+        }
 
         for (int i = 0; i < dummyCount; i++)
         {
@@ -293,6 +339,43 @@ public class StandaloneTestBootstrap : MonoBehaviour
         }
 
         Log($"더미 적 {dummyCount}명 스폰 완료. (origin={origin}, useNSM={useNSM})");
+    }
+
+    /// <summary>
+    /// [테스트 전용] 로컬 플레이어가 아레나(ArenaBounds) 밖에 있으면 첫 번째 스폰 포인트로 이동.
+    /// 셋업이 불완전(NSM/BG 좌표 어긋남)해도 단독 테스트가 가능하도록 하는 안전망.
+    /// 출시 빌드의 매칭 흐름에서는 StandaloneTestBootstrap 자체가 비활성이라 호출되지 않음.
+    /// </summary>
+    private void TeleportLocalPlayerIfOutsideArena()
+    {
+        var me = FindLocalPlayer();
+        if (me == null) return;
+
+        // ArenaBounds 위치를 기준으로 안전 영역 판정. 없으면 (0,0) 기준.
+        var arenaBounds = GameObject.Find("ArenaBounds");
+        Vector2 arenaCenter = arenaBounds != null ? (Vector2)arenaBounds.transform.position : Vector2.zero;
+        // ArenaBounds 안쪽 안전 반경 — 새 아레나 플레이 영역 ±15u 보다 조금 작게.
+        const float SafeRadius = 30f;
+
+        Vector2 myPos = me.transform.position;
+        if (Vector2.Distance(myPos, arenaCenter) <= SafeRadius) return; // 이미 안쪽
+
+        // NSM 첫 번째 스폰 포인트로 텔레포트 (없으면 아레나 중심).
+        var nsm = NetworkSpawnManager.Instance;
+        Vector2 target = arenaCenter;
+        if (nsm != null && nsm.spawnPoints != null && nsm.spawnPoints.Length > 0
+            && nsm.spawnPoints[0] != null)
+        {
+            target = (Vector2)nsm.spawnPoints[0].position;
+        }
+
+        var rb = me.GetComponent<Rigidbody2D>();
+        if (rb != null) rb.position = target;
+        me.transform.position = target;
+
+        // ServerValidator 가 큰 텔레포트를 위반으로 잡지 않도록 단독 테스트에서는 이미 비활성 상태.
+        Debug.LogWarning($"[StandaloneTest] 로컬 플레이어가 아레나 밖({myPos}) 에 스폰됨 → " +
+                         $"{target} 로 텔레포트. 영구 해결은 Tools → Homebody Monster → Setup InGame Arena 실행 후 씬 저장.");
     }
 
     /// <summary>본인 위치 기준 원형 분산 오프셋 계산.</summary>

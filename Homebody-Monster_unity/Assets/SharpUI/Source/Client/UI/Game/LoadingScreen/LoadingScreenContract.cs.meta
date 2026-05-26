@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: e204d3f6018c4f809e55958e9292728c
+timeCreated: 1585226109
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Client/UI/Game/LoadingScreen/LoadingScreenContract.cs
+  uploadId: 452711

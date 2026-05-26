@@ -168,7 +168,13 @@ public class PlayerNetworkSync : NetworkBehaviour
         // 스폰 직후 초기값도 표시되지 않는 문제 포함.
         NetworkNickname.OnValueChanged  += HandleNicknameChanged;
 
-        if (IsOwner)
+        // [버그 수정] 호스트 환경에서 서버 소유 봇/더미도 IsOwner=true 가 되어
+        // SubmitCharacterDataServerRpc 가 발사되며 host 데이터를 봇의 _serverData 로 설정함.
+        // 그 부수효과로 NetworkHp.Value 동기화 → HandleHpChanged → 봇이 InitPlayerUI 에 등록되는
+        // 타이밍 버그 발생. StandaloneTestBootstrap 이 Spawn() 전에 SetAsBot(true) 를 호출하므로
+        // 여기서 봇이면 SubmitCharacterDataServerRpc 자체를 스킵.
+        // 정상 매칭 흐름에서는 IsBot 가 항상 false 이므로 production 영향 없음.
+        if (IsOwner && (_controller == null || !_controller.IsBot))
         {
             // [Fix #1] NetworkNickname.Value를 먼저 쓰고 ServerRpc를 보내면
             // NetworkVariable 동기화가 RPC보다 늦게 도달하여 playerName이 빈 문자열이 됩니다.

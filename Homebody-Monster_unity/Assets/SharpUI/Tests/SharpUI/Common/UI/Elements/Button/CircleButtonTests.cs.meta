@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 1a6d01c5de8149a0b0cbd4a07860f43a
+timeCreated: 1585908400
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Tests/SharpUI/Common/UI/Elements/Button/CircleButtonTests.cs
+  uploadId: 452711

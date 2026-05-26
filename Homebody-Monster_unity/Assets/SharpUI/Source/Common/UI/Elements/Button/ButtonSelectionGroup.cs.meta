@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 590fd020d9284c589cda9e75585cccbf
+timeCreated: 1587122014
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/Button/ButtonSelectionGroup.cs
+  uploadId: 452711

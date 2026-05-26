@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: eb62528626ba47dbb3b6c8179fa2ed5d
+timeCreated: 1600332890
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Tests/SharpUI/Common/UI/Elements/Button/SkillTreeButtonTests.cs
+  uploadId: 452711

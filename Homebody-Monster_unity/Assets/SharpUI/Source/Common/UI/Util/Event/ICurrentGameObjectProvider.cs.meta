@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: edaf1b7159f24352ade17c6ff13c068b
+timeCreated: 1600585475
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Util/Event/ICurrentGameObjectProvider.cs
+  uploadId: 452711

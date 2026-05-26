@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: aa2f966033161ec4fb2d6f6bcc5daf84
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Base/Component/IBaseComponent.cs
+  uploadId: 452711

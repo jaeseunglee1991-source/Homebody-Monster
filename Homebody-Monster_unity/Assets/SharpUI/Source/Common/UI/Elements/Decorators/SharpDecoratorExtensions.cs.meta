@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: c1bbd94fdebf405b983828a2663ef91b
+timeCreated: 1585311872
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/Decorators/SharpDecoratorExtensions.cs
+  uploadId: 452711

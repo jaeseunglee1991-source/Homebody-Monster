@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 13d4071a0d7745eeac53ac16218f89fc
+timeCreated: 1585342614
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/Events/IElementEventPromoter.cs
+  uploadId: 452711

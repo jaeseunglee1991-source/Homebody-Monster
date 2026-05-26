@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: fffcae0ee53a4c80b40b7ca2a902c0fc
+timeCreated: 1585351575
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/Decorators/SpriteDecorator.cs
+  uploadId: 452711

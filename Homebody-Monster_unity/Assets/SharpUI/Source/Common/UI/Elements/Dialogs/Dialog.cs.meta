@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: e19c1788aa2b42daa0990f6c8197156c
+timeCreated: 1597911523
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/Dialogs/Dialog.cs
+  uploadId: 452711

@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: c9a508816d3b43409c607a07028be87f
+timeCreated: 1600021167
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/Decorators/ScaleDecorator.cs
+  uploadId: 452711

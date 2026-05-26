@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 2b543570c2bc42a2b28cb0c932a28e85
+timeCreated: 1585934767
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Tests/SharpUI/Common/UI/Elements/List/Adapter/ItemHolderStateManagerTests.cs
+  uploadId: 452711

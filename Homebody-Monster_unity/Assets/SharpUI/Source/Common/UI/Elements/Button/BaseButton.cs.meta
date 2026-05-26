@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 386f54b5b4674334b3ad00d34927ee07
+timeCreated: 1585514993
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/Button/BaseButton.cs
+  uploadId: 452711

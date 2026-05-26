@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 8c398e5b0ed3422280ffdedadf5f55fa
+timeCreated: 1600584510
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Util/Keyboard/IKeyInputState.cs
+  uploadId: 452711

@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 8239e990daf8446d8d1601e66d8c21c8
+timeCreated: 1584090092
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Client/UI/User/CharacterSelect/CharacterSelectContract.cs
+  uploadId: 452711

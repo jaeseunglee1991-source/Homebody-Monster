@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: bb98c87ed3f24487ab7f939a7bee4b43
+timeCreated: 1585250913
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/Button/RectButton.cs
+  uploadId: 452711

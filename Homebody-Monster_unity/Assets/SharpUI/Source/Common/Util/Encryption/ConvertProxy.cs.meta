@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 4980515c7b2d4f668a6c81d53795b6be
+timeCreated: 1596108811
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/Util/Encryption/ConvertProxy.cs
+  uploadId: 452711

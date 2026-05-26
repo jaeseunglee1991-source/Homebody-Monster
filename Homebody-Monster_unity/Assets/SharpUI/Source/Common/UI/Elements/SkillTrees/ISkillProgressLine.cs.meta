@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 1a42e9b3c8c747fd97035936bd3ee7f6
+timeCreated: 1599565146
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/SkillTrees/ISkillProgressLine.cs
+  uploadId: 452711

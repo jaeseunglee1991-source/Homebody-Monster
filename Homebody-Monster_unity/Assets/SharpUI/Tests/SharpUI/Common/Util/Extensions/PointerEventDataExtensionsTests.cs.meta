@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 97247dd3a2ec42639b6ea600d31c4b28
+timeCreated: 1600296918
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Tests/SharpUI/Common/Util/Extensions/PointerEventDataExtensionsTests.cs
+  uploadId: 452711

@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 854c788a794547eb83fb882d4ef66b7e
+timeCreated: 1582543042
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/Util/Extensions/ObservableExtensions.cs
+  uploadId: 452711

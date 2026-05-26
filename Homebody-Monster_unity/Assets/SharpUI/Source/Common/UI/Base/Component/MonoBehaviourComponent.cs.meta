@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: e5d704786bbf427bacbb3f6c98cce63e
+timeCreated: 1585757970
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Base/Component/MonoBehaviourComponent.cs
+  uploadId: 452711

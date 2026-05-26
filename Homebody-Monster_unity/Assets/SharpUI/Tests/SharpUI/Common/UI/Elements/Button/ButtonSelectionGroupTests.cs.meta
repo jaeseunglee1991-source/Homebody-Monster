@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 22fc3f2392ad2499aad08ed75a61bd7a
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Tests/SharpUI/Common/UI/Elements/Button/ButtonSelectionGroupTests.cs
+  uploadId: 452711

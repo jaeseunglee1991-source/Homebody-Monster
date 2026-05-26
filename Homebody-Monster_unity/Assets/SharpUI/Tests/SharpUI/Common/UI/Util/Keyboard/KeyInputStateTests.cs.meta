@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: a2c4eee8813a4cb29d8869967b732ed0
+timeCreated: 1600631368
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Tests/SharpUI/Common/UI/Util/Keyboard/KeyInputStateTests.cs
+  uploadId: 452711

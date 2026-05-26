@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 7b66ed70cbe84f44803672cfad57e77c
+timeCreated: 1599818788
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/SkillBars/SkillBar.cs
+  uploadId: 452711

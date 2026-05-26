@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 41a867456fe6402ca1d68bba6fc32a6c
+timeCreated: 1599471660
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Tests/SharpUI/Common/UI/Util/Scene/SceneUtilsTests.cs
+  uploadId: 452711

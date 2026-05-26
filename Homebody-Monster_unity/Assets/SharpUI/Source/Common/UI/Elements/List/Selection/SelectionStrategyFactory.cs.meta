@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 026a3a8763e742468d9df82b567d0b5a
+timeCreated: 1585162509
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/List/Selection/SelectionStrategyFactory.cs
+  uploadId: 452711

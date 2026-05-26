@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 776e6e7bc4a843768195dddb7e070fc1
+timeCreated: 1594284742
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Tests/SharpUI/Common/UI/Elements/Toggle/ToggleGroupTests.cs
+  uploadId: 452711

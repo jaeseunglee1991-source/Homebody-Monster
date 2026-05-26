@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 590ccb8f6fcc40c28435925102a6a9a1
+timeCreated: 1586953666
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/Toggle/ToggleButton.cs
+  uploadId: 452711

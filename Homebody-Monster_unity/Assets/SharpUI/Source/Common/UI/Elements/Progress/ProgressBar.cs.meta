@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: e2329df688044318967a969c0d05b772
+timeCreated: 1599484198
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/Progress/ProgressBar.cs
+  uploadId: 452711

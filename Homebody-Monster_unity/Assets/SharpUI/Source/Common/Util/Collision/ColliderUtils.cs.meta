@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: fd339dd0486c4e98820f0b8f68c659c7
+timeCreated: 1585909611
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/Util/Collision/ColliderUtils.cs
+  uploadId: 452711

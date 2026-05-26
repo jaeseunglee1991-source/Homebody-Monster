@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 00e89cf53d0d48c78e6ae39b1179c7a4
+timeCreated: 1600631083
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Tests/SharpUI/Common/UI/Util/TimeUtils/TimeProviderTests.cs
+  uploadId: 452711

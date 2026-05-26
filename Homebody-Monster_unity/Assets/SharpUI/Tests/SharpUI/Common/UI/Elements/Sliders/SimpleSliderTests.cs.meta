@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: a2e8ce58934e444ebb599027f1ee279f
+timeCreated: 1598870103
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Tests/SharpUI/Common/UI/Elements/Sliders/SimpleSliderTests.cs
+  uploadId: 452711

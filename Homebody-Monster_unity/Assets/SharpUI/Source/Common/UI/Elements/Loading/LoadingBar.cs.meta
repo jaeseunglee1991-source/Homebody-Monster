@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 401a1256649342f8aca499223167a07f
+timeCreated: 1597836261
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/Loading/LoadingBar.cs
+  uploadId: 452711

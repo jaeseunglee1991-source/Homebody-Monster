@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 5a03f8144ee14deb94df842abd5aabdc
+timeCreated: 1585252654
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/Decorators/ColorDecoratorForImage.cs
+  uploadId: 452711

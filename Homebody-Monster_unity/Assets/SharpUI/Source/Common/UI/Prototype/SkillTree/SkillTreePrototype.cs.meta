@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: adaf278021474e0e92443b3579890f84
+timeCreated: 1599519203
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Prototype/SkillTree/SkillTreePrototype.cs
+  uploadId: 452711

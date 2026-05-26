@@ -368,10 +368,12 @@ public class PlayerController : NetworkBehaviour
         if (mouse != null && mouse.leftButton.wasPressedThisFrame)
         {
             Vector2 mouseScreen = mouse.position.ReadValue();
-            if (!IsTouchOverUI(mouseScreen))
+            var uiHit = ClassifyUIHit(mouseScreen);
+            if (uiHit != UIHitKind.Blocking)
             {
                 Vector2 mouseWorld = mainCam.ScreenToWorldPoint(mouseScreen);
-                ProcessAttackClickAt(mouseWorld);
+                // 조이스틱 영역 위 클릭은 적이 있을 때만 평타로 잡고, 빈 공간이면 조이스틱에 양보.
+                ProcessAttackClickAt(mouseWorld, clearOnMiss: uiHit != UIHitKind.JoystickOnly);
             }
         }
 #endif
@@ -385,17 +387,27 @@ public class PlayerController : NetworkBehaviour
         foreach (var touch in activeTouches)
         {
             if (touch.phase != UnityEngine.InputSystem.TouchPhase.Began) continue;
-            // UI(버튼, 조이스틱 등) 위를 터치했을 때 평타 오발 방지
-            if (IsTouchOverUI(touch.screenPosition)) continue;
+
+            // [평타 우선] 조이스틱 raycast 영역(부모 RectTransform)이 화면 절반을 덮어
+            // 그 안의 적을 탭으로 공격할 수 없던 문제를 해결.
+            // - Blocking(버튼·HUD 등): 기존대로 평타 차단.
+            // - JoystickOnly: 적이 있으면 평타 발동, 없으면 ClearTarget 하지 않고 조이스틱에 양보.
+            // - None: 기존 동작.
+            var uiHit = ClassifyUIHit(touch.screenPosition);
+            if (uiHit == UIHitKind.Blocking) continue;
 
             Vector2 worldPos = mainCam.ScreenToWorldPoint(touch.screenPosition);
-            ProcessAttackClickAt(worldPos);
+            ProcessAttackClickAt(worldPos, clearOnMiss: uiHit != UIHitKind.JoystickOnly);
             return; // 한 프레임에 한 터치만 처리
         }
     }
 
-    /// <summary>월드 좌표 클릭/터치를 평타 대상 지정 또는 타겟 해제로 변환.</summary>
-    private void ProcessAttackClickAt(Vector2 worldPos)
+    /// <summary>
+    /// 월드 좌표 클릭/터치를 평타 대상 지정 또는 타겟 해제로 변환.
+    /// 반환: 클릭 지점에서 유효한 적을 찾아 SetAttackTarget 한 경우 true.
+    /// clearOnMiss: false 이면 적이 없어도 기존 타겟/자동평타를 유지 (조이스틱 영역 탭에서 사용).
+    /// </summary>
+    private bool ProcessAttackClickAt(Vector2 worldPos, bool clearOnMiss = true)
     {
         // [버그 수정] PlayerCharacter 프리팹의 Enemy Layer 가 "Nothing" 으로 설정되어 있으면
         // OverlapPoint 가 아무것도 검출하지 못해 평타가 영원히 안 됨.
@@ -412,9 +424,11 @@ public class PlayerController : NetworkBehaviour
             if (enemy != null && !enemy.IsDead && enemy != this)
             {
                 SetAttackTarget(enemy);
-                return;
+                return true;
             }
         }
+        if (!clearOnMiss) return false;
+
         // 적이 없으면 자동 평타/추격 해제 (수동 취소)
         if (_autoAttackCoroutine != null)
         {
@@ -422,19 +436,43 @@ public class PlayerController : NetworkBehaviour
             _autoAttackCoroutine = null;
         }
         ClearTarget();
+        return false;
     }
 
     // PointerEventData 기반 UI 히트 테스트 — New Input System과 호환
     private static readonly List<UnityEngine.EventSystems.RaycastResult> _uiRaycastResults
         = new List<UnityEngine.EventSystems.RaycastResult>();
 
-    private static bool IsTouchOverUI(Vector2 screenPos)
+    /// <summary>
+    /// 터치/클릭 지점이 어떤 UI 위에 있는지 분류.
+    /// - JoystickOnly: 조이스틱 raycast 영역만 걸린 경우(부모 RectTransform 포함). 평타 우선 허용.
+    /// - Blocking: 버튼·HUD 등 비-조이스틱 UI가 하나라도 걸린 경우. 평타 차단.
+    /// - None: UI 히트 없음.
+    /// </summary>
+    private enum UIHitKind { None, JoystickOnly, Blocking }
+
+    private static UIHitKind ClassifyUIHit(Vector2 screenPos)
     {
-        if (EventSystem.current == null) return false;
+        if (EventSystem.current == null) return UIHitKind.None;
         var pe = new PointerEventData(EventSystem.current) { position = screenPos };
         _uiRaycastResults.Clear();
         EventSystem.current.RaycastAll(pe, _uiRaycastResults);
-        return _uiRaycastResults.Count > 0;
+        if (_uiRaycastResults.Count == 0) return UIHitKind.None;
+
+        bool sawJoystick = false;
+        foreach (var result in _uiRaycastResults)
+        {
+            if (result.gameObject == null) continue;
+            // 조이스틱(부모 RectTransform 포함)은 평타 발동을 막지 않는다.
+            if (result.gameObject.GetComponentInParent<Joystick>() != null)
+            {
+                sawJoystick = true;
+                continue;
+            }
+            // 그 외 UI(버튼·스킬 슬롯·HUD 등)는 1개라도 있으면 평타 차단.
+            return UIHitKind.Blocking;
+        }
+        return sawJoystick ? UIHitKind.JoystickOnly : UIHitKind.None;
     }
 
     // ════════════════════════════════════════════════════════════
@@ -551,6 +589,17 @@ public class PlayerController : NetworkBehaviour
         targetEnemy          = null;
         isChasing            = false;
         _autoAttackCoroutine = null;
+
+        // [FIX] 공격 취소 시 Animator의 Attack/Skill 트리거를 즉시 소거.
+        // 트리거는 set 된 후 다음 transition 평가 시 1회 소비되는데,
+        // 코루틴만 멈추고 트리거를 남겨두면 마지막 set 트리거가 다음 프레임에 발화하여
+        // "빈 공간 클릭으로 공격을 멈췄는데 한 번 더 공격 모션이 나옴" 증상이 발생.
+        // ResetTrigger 는 미정의 파라미터에 호출해도 경고만 1회 출력되고 게임에 영향 없음.
+        if (animator != null && animator.runtimeAnimatorController != null)
+        {
+            animator.ResetTrigger("Attack");
+            animator.ResetTrigger("Skill");
+        }
     }
 
     // ════════════════════════════════════════════════════════════
@@ -752,7 +801,15 @@ public class PlayerController : NetworkBehaviour
             _autoAttackCoroutine = null;
         }
 
-        if (animator != null) animator.SetTrigger("Die");
+        if (animator != null)
+        {
+            // [버그 수정] 치명타 1프레임에 NotifyHitClientRpc → DeclareDeathClientRpc 순서로 호출되어
+            // Hurt/Die 트리거가 동시에 set 됨. AnyState 우선순위로 Die가 먼저 전이하더라도 남은 Hurt 트리거가
+            // 다음 프레임에 발화하여 Archer_Hurt → (자동 ExitTime) → Idle 로 빠져나가 Die 애니메이션이 묻힘.
+            // Die 직전에 Hurt 트리거를 명시적으로 소비하여 사망 애니메이션이 유지되도록 함.
+            animator.ResetTrigger("Hurt");
+            animator.SetTrigger("Die");
+        }
         AudioManager.Instance?.PlayDeath();
         GetComponent<Collider2D>().enabled = false;
         if (Rb != null) Rb.simulated = false;

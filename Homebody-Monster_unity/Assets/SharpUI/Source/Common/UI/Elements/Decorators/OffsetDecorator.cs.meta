@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: e0148c97f5dd46228c9dfb9bcfcbee85
+timeCreated: 1600023210
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/Decorators/OffsetDecorator.cs
+  uploadId: 452711

@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: e2409a9945034e0b86f990cb74e23de0
+timeCreated: 1600175109
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Client/UI/Game/VendorScreen/VendorScreenComponent.cs
+  uploadId: 452711

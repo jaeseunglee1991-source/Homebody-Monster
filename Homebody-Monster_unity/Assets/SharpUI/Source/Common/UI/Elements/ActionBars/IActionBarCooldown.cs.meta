@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: f08243b5ab084009a2f98728f1c4d7e2
+timeCreated: 1600290158
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/ActionBars/IActionBarCooldown.cs
+  uploadId: 452711

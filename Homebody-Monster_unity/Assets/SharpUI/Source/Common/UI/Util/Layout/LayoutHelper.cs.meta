@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 7f037e76574b4b208eae7d31c111ef9d
+timeCreated: 1599122900
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Util/Layout/LayoutHelper.cs
+  uploadId: 452711

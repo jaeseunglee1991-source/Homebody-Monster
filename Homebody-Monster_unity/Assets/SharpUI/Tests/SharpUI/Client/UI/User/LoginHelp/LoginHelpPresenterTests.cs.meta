@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 7fb084e81483449c867a490e899a8285
+timeCreated: 1596019665
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Tests/SharpUI/Client/UI/User/LoginHelp/LoginHelpPresenterTests.cs
+  uploadId: 452711

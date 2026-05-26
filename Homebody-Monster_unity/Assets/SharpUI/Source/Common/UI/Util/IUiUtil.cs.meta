@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 394d0a72a85e48119a229f530e30701c
+timeCreated: 1597389939
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Util/IUiUtil.cs
+  uploadId: 452711

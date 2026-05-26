@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 54ebe45b7ce244d0806856b9bc077029
+timeCreated: 1585146453
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/List/Selection/ItemSelectionType.cs
+  uploadId: 452711

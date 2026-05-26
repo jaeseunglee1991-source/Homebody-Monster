@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 99be0233461e4b8fb16ae5ccb8ef0bd4
+timeCreated: 1599768530
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/ModalViews/ModalView.cs
+  uploadId: 452711

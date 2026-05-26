@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: abbe67f23055c7f489f4c50df45f7f83
+AssemblyDefinitionImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/SharpUIScriptsAssembly.asmdef
+  uploadId: 452711

@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 4466898abf73407b95211905d5b70ae0
+timeCreated: 1600333435
+AssetOrigin:
+  serializedVersion: 1
+  productId: 195933
+  packageName: SharpUI GUI
+  packageVersion: 1.0
+  assetPath: Assets/SharpUI/Source/Common/UI/Elements/SkillTrees/ISkillAmountLimit.cs
+  uploadId: 452711
