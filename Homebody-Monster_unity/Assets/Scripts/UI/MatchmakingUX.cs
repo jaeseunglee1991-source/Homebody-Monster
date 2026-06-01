@@ -170,11 +170,12 @@ public class MatchmakingUX : MonoBehaviour
         {
             elapsed += Time.deltaTime;
 
-            // 경과 시간 표시
-            int   m = Mathf.FloorToInt(elapsed / 60f);
-            int   s = Mathf.FloorToInt(elapsed % 60f);
+            // 남은 시간 표시 (사진 UI와 동일하게 mm:ss가 줄어드는 형태)
+            float remain = Mathf.Max(0f, TimeoutSeconds - elapsed);
+            int   m = Mathf.FloorToInt(remain / 60f);
+            int   s = Mathf.FloorToInt(remain % 60f);
             if (elapsedText != null)    elapsedText.text = $"{m:D2}:{s:D2}";
-            if (progressSlider != null) progressSlider.value = elapsed / TimeoutSeconds;
+            if (progressSlider != null) progressSlider.value = remain / TimeoutSeconds;
 
             // 단계별 메시지 교체
             int newPhase = Mathf.Min(Mathf.FloorToInt(elapsed / PhaseInterval), PhaseMessages.Length - 1);
