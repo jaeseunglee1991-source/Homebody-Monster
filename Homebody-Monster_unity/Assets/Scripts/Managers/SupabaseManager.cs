@@ -194,7 +194,9 @@ public partial class SupabaseManager : MonoBehaviour
     {
         if (!IsInitialized || Client.Auth.CurrentUser == null) return;
 
-        string roomId = GameManager.Instance?.currentRoomId ?? "unknown";
+        // [Fix] null뿐 아니라 빈 문자열도 방어 — DB 함수가 P0001("p_room_id must not be empty")로 거부함.
+        string roomId = GameManager.Instance?.currentRoomId;
+        if (string.IsNullOrEmpty(roomId)) roomId = "unknown";
 
         var parameters = new Dictionary<string, object>
         {

@@ -5,15 +5,11 @@ using System.Collections;
 using System.Collections.Generic;
 
 /// <summary>
-/// 인게임 HUD 전체 관리.
+/// 인게임 HUD — 표시 전용(데이터 구동은 Fusion NetHudBridge가 담당).
 ///
-/// 변경 사항:
-///  - reviveInfoText 필드 추가: 부활 UI에 제한 사유 표시
-///    (60초 초과, 생존자 2명 이하, 매치 횟수 소진 등)
-///  - ShowReviveUI()에서 현재 매치 상태에 맞는 안내 문구 표시
-///  - ReviveDeniedClientRpc 수신 시 HideReviveUI() 호출 (PlayerNetworkSync에서 직접 처리)
-///  - GetSkillShortName 전체 40종 포함 유지
-///  - 킬 피드(Kill Feed) 구현: 최대 5줄, 항목별 4초 후 자동 제거
+/// [Pass C] NGO 결합부(InitPlayerUI(PlayerController)/스킬버튼 직접 처리/ShowReviveUI(PlayerNetworkSync)/
+/// InGameManager 참조)는 제거됨. NetHudBridge가 NetPlayer/NetMatch 값을 읽어 아래 필드·메서드를 구동하고,
+/// 스킬버튼·부활·항복 패널도 브리지가 직접 배선한다. 이 클래스는 캔버스 위젯 보관 + 표시 헬퍼만 제공.
 /// </summary>
 public class InGameHUD : MonoBehaviour
 {
@@ -21,233 +17,80 @@ public class InGameHUD : MonoBehaviour
 
     [Header("체력 UI")]
     public Slider healthSlider;
-    public TextMeshProUGUI   healthText;
+    public TextMeshProUGUI healthText;
 
     [Header("생존자 UI")]
     public TextMeshProUGUI survivorCountText;
 
-    [Header("스킬 버튼 (최대 4개)")]
+    [Header("스킬 버튼 (최대 4개) — NetHudBridge가 배선")]
     public Button[] skillButtons;
-    public Image[]  skillCooldownFills;
-    public TextMeshProUGUI[]   skillNameTexts;
+    public Image[] skillCooldownFills;
+    public TextMeshProUGUI[] skillNameTexts;
 
     [Header("타이머")]
     public TextMeshProUGUI timerText;
 
     [Header("게임 종료 배너")]
     public GameObject endBannerPanel;
-    public TextMeshProUGUI       endBannerText;
+    public TextMeshProUGUI endBannerText;
 
     [Header("킬 피드")]
-    /// <summary>
-    /// 킬 로그를 표시할 TextMeshProUGUI.
-    /// Inspector에서 화면 우측 상단 영역에 배치하세요.
-    /// Overflow: Overflow, Alignment: Right, Rich Text: ON 권장.
-    /// </summary>
     public TextMeshProUGUI killFeedText;
 
-    // ── 킬 피드 내부 상태 ─────────────────────────────────────
-    private const int   KillFeedMaxLines    = 5;
+    private const int KillFeedMaxLines = 5;
     private const float KillFeedDisplaySecs = 4f;
-
-    private readonly Queue<(string msg, float expireAt)> _killFeedQueue
-        = new Queue<(string, float)>();
-
+    private readonly Queue<(string msg, float expireAt)> _killFeedQueue = new Queue<(string, float)>();
     private Coroutine _killFeedRoutine;
 
-    [Header("조작 UI 루트 (스펙테이터 모드에서 숨김)")]
-    /// <summary>
-    /// 스킬 버튼, 공격 버튼 등 인게임 조작 UI를 묶은 루트 GameObject.
-    /// Inspector에서 연결하세요. SpectatorManager가 사망 시 비활성화합니다.
-    /// </summary>
+    [Header("조작 UI 루트 (스펙테이터/사망 시 숨김 — NetHudBridge가 토글)")]
     public GameObject controlsRoot;
 
-    [Header("포기 확인 UI")]
-    /// <summary>
-    /// 인게임 Back 키(또는 Esc) → "게임을 포기하시겠습니까?" 팝업 루트.
-    /// Inspector에서 패널 GameObject(기본 비활성), 확인/취소 버튼을 연결하세요.
-    /// 실시간 멀티플레이이므로 게임은 일시정지되지 않고 팝업만 오버레이됩니다.
-    /// </summary>
+    [Header("포기(항복) 확인 UI — NetHudBridge가 배선")]
     public GameObject surrenderConfirmPanel;
-    public Button     surrenderConfirmButton;
-    public Button     surrenderCancelButton;
+    public Button surrenderConfirmButton;
+    public Button surrenderCancelButton;
 
-    [Header("부활 UI")]
-    public GameObject      revivePanel;
+    [Header("부활 UI — NetHudBridge가 배선")]
+    public GameObject revivePanel;
     public TextMeshProUGUI reviveTimerText;
-    /// <summary>
-    /// 부활 가능 여부 및 제한 사유를 표시하는 텍스트.
-    /// Inspector에서 RevivePanel 하위에 배치하세요.
-    /// 예: "남은 부활 횟수: 2/3  |  60초 제한 내 사용 가능"
-    /// </summary>
-    public TextMeshProUGUI            reviveInfoText;
-    public Button          reviveButton;
-    public Button          giveUpButton;
-
-    private PlayerController    localPlayer;
-    private float[]             cooldownTimers;
-    private float[]             cooldownMaxes;
-
-    private PlayerNetworkSync   pendingReviveSync;
-    private Coroutine           reviveCountdownRoutine;
-
-    // H-14: PlayerController.Start와 HandleHpChanged 두 경로에서 InitPlayerUI가 두 번 호출되는 문제 방지
-    private bool _hudInitialized;
+    public TextMeshProUGUI reviveInfoText;
+    public Button reviveButton;
+    public Button giveUpButton;
 
     private void Awake()
     {
         if (Instance == null) Instance = this;
         else { Destroy(gameObject); return; }
 
-        if (endBannerPanel         != null) endBannerPanel.SetActive(false);
-        if (revivePanel            != null) revivePanel.SetActive(false);
-        if (surrenderConfirmPanel  != null) surrenderConfirmPanel.SetActive(false);
-        if (killFeedText           != null) killFeedText.text = "";
-        
+        if (endBannerPanel        != null) endBannerPanel.SetActive(false);
+        if (revivePanel           != null) revivePanel.SetActive(false);
+        if (surrenderConfirmPanel != null) surrenderConfirmPanel.SetActive(false);
+        if (killFeedText          != null) killFeedText.text = "";
+
         if (timerText == null)
         {
             var tmpList = GetComponentsInChildren<TextMeshProUGUI>(true);
             foreach (var t in tmpList) if (t.gameObject.name == "TimerText") { timerText = t; break; }
         }
-        
-        // [FIX] 초기 텍스트가 "TimerText"로 남아있지 않도록 초기화
         if (timerText != null) timerText.text = "00:00";
+
         if (survivorCountText == null)
         {
             var tmpList = GetComponentsInChildren<TextMeshProUGUI>(true);
             foreach (var t in tmpList) if (t.gameObject.name == "SurvivorCountText") { survivorCountText = t; break; }
         }
-        Debug.Log("InGameHUD Initialized.");
     }
 
-    private void Start()
-    {
-        // [FIX] OnNetworkSpawn이 Awake보다 먼저 실행될 경우 RefreshHUD가 누락되는 문제 방지
-        if (InGameManager.Instance != null)
-        {
-            UpdateSurvivorCount(InGameManager.Instance.AliveCount, InGameManager.Instance.maxPlayers);
-        }
-    }
+    private void OnDestroy() { if (Instance == this) Instance = null; }
 
-    public void InitPlayerUI(PlayerController player)
-    {
-        // [버그 수정] 최종 방어 — 봇/더미가 어떤 경로로든 여기 도달하면 거부.
-        // 호스트 환경에서 서버 소유 더미도 IsOwner=true 라서 PlayerController.Start /
-        // PlayerNetworkSync 등 여러 진입점에서 InitPlayerUI 호출이 발생할 수 있음.
-        // 더미가 등록되면 SetupSkillButtons 가 더미의 빈 activeSkills 로 버튼을 셋업해
-        // skill 버튼이 사라지거나 localPlayer.UseSkill 이 skillCount=0 으로 거부됨.
-        if (player == null || player.IsBot)
-        {
-#if UNITY_EDITOR
-            if (player != null && player.IsBot)
-                Debug.LogWarning($"[InGameHUD] 봇/더미의 InitPlayerUI 호출 차단: {player.name}");
-#endif
-            return;
-        }
-
-        // H-14: 중복 호출 가드 — 첫 호출에서 즉시 플래그를 세워서 PlayerController.Start와
-        // HandleHpChanged가 동시 진입할 때 SetupSkillButtons가 두 번 실행되는 것을 방지.
-        if (_hudInitialized && localPlayer == player) return;
-        _hudInitialized = true;
-
-        localPlayer = player;
-        SetupSkillButtons(player);
-
-#if UNITY_EDITOR
-        int skills = player.myData?.activeSkills?.Count ?? -1;
-        Debug.Log($"[InGameHUD] InitPlayerUI 등록: {player.name} (instanceID={player.GetInstanceID()}, " +
-                  $"_isBot={player.IsBot}, activeSkills={skills})");
-#endif
-    }
-
-    /// <summary>
-    /// 인게임 조작 UI(스킬 버튼 등)의 표시 여부를 전환합니다.
-    /// SpectatorManager에서 사망 후 관전 진입 시 false로 호출합니다.
-    /// </summary>
+    /// <summary>조작 UI(스킬버튼 등) 표시 토글. NetHudBridge가 사망/관전 시 false로 호출.</summary>
     public void SetControlsVisible(bool visible)
     {
-        if (controlsRoot != null)
-            controlsRoot.SetActive(visible);
-    }
-
-    private void Update() => UpdateCooldownUI();
-
-    // ════════════════════════════════════════════════════════════
-    //  스킬 버튼 초기화
-    // ════════════════════════════════════════════════════════════
-
-    private void SetupSkillButtons(PlayerController player)
-    {
-        if (player?.myData == null ||
-            player.myData.activeSkills == null ||
-            skillButtons == null ||
-            skillButtons.Length == 0)
-        {
-            return;
-        }
-
-        List<ActiveSkillType> skills = player.myData.activeSkills;
-        int count = Mathf.Min(skills.Count, skillButtons.Length);
-        cooldownTimers = new float[skillButtons.Length];
-        cooldownMaxes  = new float[skillButtons.Length];
-
-        for (int i = 0; i < skillButtons.Length; i++)
-        {
-            if (skillButtons[i] == null) continue;
-            if (i < count)
-            {
-                ActiveSkillType skill = skills[i];
-                int captured = i;
-                skillButtons[i].gameObject.SetActive(true);
-                skillButtons[i].onClick.RemoveAllListeners();
-                skillButtons[i].onClick.AddListener(() => OnSkillClicked(captured));
-                if (skillNameTexts != null && i < skillNameTexts.Length && skillNameTexts[i] != null)
-                    skillNameTexts[i].text = GetSkillShortName(skill);
-                float cd = SkillSystem.GetCooldown(skill);
-                cooldownMaxes[i]  = cd;
-                cooldownTimers[i] = 0f;
-                if (skillCooldownFills != null && i < skillCooldownFills.Length && skillCooldownFills[i] != null)
-                    skillCooldownFills[i].fillAmount = 0f;
-            }
-            else
-            {
-                skillButtons[i].gameObject.SetActive(false);
-            }
-        }
-    }
-
-    private void OnSkillClicked(int slot)
-    {
-        if (localPlayer == null || cooldownTimers == null ||
-            slot >= cooldownTimers.Length || cooldownTimers[slot] > 0f) return;
-
-        // [FIX] UseSkill 반환값(bool)으로 성공 여부 확인 후 쿨다운 시작.
-        // IsSilenced/IsDead로 RPC가 차단돼도 쿨다운 UI가 무조건 시작되는 버그 수정.
-        if (localPlayer.UseSkill(slot))
-            cooldownTimers[slot] = cooldownMaxes[slot];
-    }
-
-    private void UpdateCooldownUI()
-    {
-        if (cooldownTimers == null) return;
-        for (int i = 0; i < cooldownTimers.Length; i++)
-        {
-            // [버그 수정] 비활성 스킬 버튼은 순회 스킵 — 슬롯에 스킬이 없는 버튼의 쿨다운/UI 갱신 방지.
-            if (skillButtons != null && i < skillButtons.Length && skillButtons[i] != null
-                && !skillButtons[i].gameObject.activeSelf)
-                continue;
-
-            if (cooldownTimers[i] > 0f)
-                cooldownTimers[i] = Mathf.Max(0f, cooldownTimers[i] - Time.deltaTime);
-            if (skillCooldownFills != null && i < skillCooldownFills.Length && skillCooldownFills[i] != null)
-                skillCooldownFills[i].fillAmount = cooldownMaxes[i] > 0f ? cooldownTimers[i] / cooldownMaxes[i] : 0f;
-            if (skillButtons != null && i < skillButtons.Length && skillButtons[i] != null)
-                skillButtons[i].interactable = cooldownTimers[i] <= 0f;
-        }
+        if (controlsRoot != null) controlsRoot.SetActive(visible);
     }
 
     // ════════════════════════════════════════════════════════════
-    //  HUD 업데이트
+    //  표시 헬퍼 (NetHudBridge가 호출)
     // ════════════════════════════════════════════════════════════
 
     public void UpdateHealthBar(float current, float max)
@@ -262,10 +105,10 @@ public class InGameHUD : MonoBehaviour
             survivorCountText.text = $"생존자: {alive} / {total}";
     }
 
-    public void UpdateTimer(float elapsed)
+    public void UpdateTimer(float seconds)
     {
         if (timerText == null) return;
-        timerText.text = $"{(int)(elapsed / 60f):00}:{(int)(elapsed % 60f):00}";
+        timerText.text = $"{(int)(seconds / 60f):00}:{(int)(seconds % 60f):00}";
     }
 
     public void ShowGameEndBanner(string message, bool playResultBGM = false)
@@ -285,23 +128,17 @@ public class InGameHUD : MonoBehaviour
     //  킬 피드
     // ════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// 킬 이벤트 발생 시 호출합니다.
-    /// PlayerNetworkSync(또는 InGameManager)의 킬 처리 완료 콜백에서 호출하세요.
-    /// 로컬 플레이어가 공격자일 경우 닉네임을 노란색으로 강조합니다.
-    /// </summary>
+    /// <summary>킬 이벤트 표시. 로컬 플레이어가 공격자면 닉네임을 노란색으로 강조.</summary>
     public void ShowKillFeed(string attackerName, string victimName)
     {
         if (killFeedText == null) return;
 
         string localNickname = GameManager.Instance?.currentPlayerNickname ?? "";
-
         string attackerFormatted = attackerName == localNickname
             ? $"<color=#f1c40f>{attackerName}</color>"
             : attackerName;
 
         string entry = $"⚔️ {attackerFormatted} → {victimName}";
-
         _killFeedQueue.Enqueue((entry, Time.time + KillFeedDisplaySecs));
         AudioManager.Instance?.PlayKillFeed();
 
@@ -309,7 +146,6 @@ public class InGameHUD : MonoBehaviour
             _killFeedQueue.Dequeue();
 
         RefreshKillFeedText();
-
         if (_killFeedRoutine == null)
             _killFeedRoutine = StartCoroutine(KillFeedExpiryRoutine());
     }
@@ -317,12 +153,7 @@ public class InGameHUD : MonoBehaviour
     private void RefreshKillFeedText()
     {
         if (killFeedText == null) return;
-
-        if (_killFeedQueue.Count == 0)
-        {
-            killFeedText.text = "";
-            return;
-        }
+        if (_killFeedQueue.Count == 0) { killFeedText.text = ""; return; }
 
         var sb = new System.Text.StringBuilder();
         foreach (var (msg, _) in _killFeedQueue)
@@ -336,299 +167,17 @@ public class InGameHUD : MonoBehaviour
     private IEnumerator KillFeedExpiryRoutine()
     {
         var halfSec = new WaitForSeconds(0.5f);
-
         while (_killFeedQueue.Count > 0)
         {
             yield return halfSec;
-
             bool changed = false;
             while (_killFeedQueue.Count > 0 && Time.time >= _killFeedQueue.Peek().expireAt)
             {
                 _killFeedQueue.Dequeue();
                 changed = true;
             }
-
-            if (changed)
-                RefreshKillFeedText();
+            if (changed) RefreshKillFeedText();
         }
-
         _killFeedRoutine = null;
     }
-
-    // ════════════════════════════════════════════════════════════
-    //  부활 UI
-    // ════════════════════════════════════════════════════════════
-
-    /// <summary>
-    /// PlayerNetworkSync.OfferReviveClientRpc()에서 호출.
-    /// 5초 카운트다운 부활창을 표시하며, 현재 매치 부활 잔여 횟수와
-    /// 제한 조건 안내 문구를 함께 표시합니다.
-    /// </summary>
-    public void ShowReviveUI(PlayerNetworkSync sync)
-    {
-        pendingReviveSync = sync;
-        if (revivePanel != null) revivePanel.SetActive(true);
-
-        // ── 부활 정보 텍스트 갱신 ──────────────────────────────
-        UpdateReviveInfoText();
-
-        if (reviveButton != null)
-        {
-            reviveButton.onClick.RemoveAllListeners();
-            reviveButton.onClick.AddListener(OnReviveClicked);
-        }
-
-        if (giveUpButton != null)
-        {
-            giveUpButton.onClick.RemoveAllListeners();
-            giveUpButton.onClick.AddListener(OnGiveUpClicked);
-        }
-
-        if (reviveCountdownRoutine != null) StopCoroutine(reviveCountdownRoutine);
-        reviveCountdownRoutine = StartCoroutine(ReviveCountdown(5f));
-    }
-
-    /// <summary>
-    /// 보유 부활권 수량, 매치 잔여 횟수, 제한 시간을 reviveInfoText에 표시합니다.
-    /// Supabase profiles.revive_ticket_count는 GameManager.Instance.reviveTicketCount에
-    /// 캐시된 값을 사용합니다. (로비 로그인 시 로드됨)
-    /// </summary>
-    private void UpdateReviveInfoText()
-    {
-        if (reviveInfoText == null) return;
-
-        var mgr = InGameManager.Instance;
-        if (mgr == null) { reviveInfoText.text = ""; return; }
-
-        int remaining      = InGameManager.MaxMatchReviveCount - mgr.MatchReviveUsedCount;
-        // BUG-24: 60f 하드코딩 시 GameBalanceConfig.ReviveTimeLimit과 서버 판정(CanOfferRevive)이 불일치.
-        float reviveLimit  = GameBalanceConfig.Get()?.ReviveTimeLimit ?? 60f;
-        float timeLeft     = Mathf.Max(0f, reviveLimit - mgr.ElapsedGameTime);
-        int survivors      = mgr.AliveCount;
-
-        // Supabase에서 캐시된 보유 티켓 수량
-        int ownedTickets   = GameManager.Instance != null ? GameManager.Instance.reviveTicketCount : 0;
-
-        // ── 부활 가능 여부 판정 ────────────────────────────────────────
-        // [버그 수정 1] reviveButton.interactable 미제어 버그.
-        // 기존 코드는 안내 텍스트만 바꾸고 버튼 활성 상태를 제어하지 않아
-        // 티켓 없음·시간 초과·생존자 부족 조건에서도 버튼이 항상 눌렸음.
-        //
-        // [버그 수정 2] survivors <= 2 → survivors < 3.
-        // CanOfferRevive(AliveCount < 3)와 동일 기준으로 맞춤.
-        // survivors(=AliveCount)에는 사망자가 아직 포함되므로
-        // survivors < 3 이면 부활 후 실제 생존자 1명 이하 → 거부.
-        bool canRevive =
-            ownedTickets > 0  &&
-            timeLeft     > 0f &&
-            survivors    >= 3 &&
-            remaining    > 0;
-
-        if (reviveButton != null)
-            reviveButton.interactable = canRevive;
-
-        // ── 안내 텍스트 — 거부 사유 우선 표시 ─────────────────────────
-        if (ownedTickets <= 0)
-        {
-            reviveInfoText.text = "보유한 즉시부활권이 없습니다.\n(로비에서 피자 또는 광고로 획득 가능)";
-        }
-        else if (timeLeft <= 0f)
-        {
-            reviveInfoText.text = $"게임 시작 {reviveLimit:0}초가 지나 부활권을 사용할 수 없습니다.";
-        }
-        else if (survivors < 3)
-        {
-            // survivors - 1 = 사망자를 뺀 실제 체감 생존자 수
-            reviveInfoText.text = $"생존자가 {survivors - 1}명이라 부활권을 사용할 수 없습니다.\n(부활 후 최소 2명 이상이어야 사용 가능)";
-        }
-        else if (remaining <= 0)
-        {
-            reviveInfoText.text = "이번 매치의 부활권이 모두 소진되었습니다. (0/3)";
-        }
-        else
-        {
-            reviveInfoText.text =
-                $"보유 즉시부활권: {ownedTickets}장  |  " +
-                $"매치 잔여: {remaining}/{InGameManager.MaxMatchReviveCount}  |  " +
-                $"제한 시간: {timeLeft:0}초";
-        }
-    }
-
-    private IEnumerator ReviveCountdown(float duration)
-    {
-        // H-21: WaitForSeconds(0.5f) 누적은 프레임 변동성·일시정지에서 부정확.
-        // Time.deltaTime 기반으로 변경 — 실시간과 정확히 일치, 0.5초 주기 UI 갱신은 별도 누적값으로 제어.
-        float timer = duration;
-        float refreshAccum = 0f;
-        const float refreshInterval = 0.5f;
-
-        while (timer > 0f)
-        {
-            if (reviveTimerText != null)
-                reviveTimerText.text = Mathf.CeilToInt(timer).ToString();
-
-            // A-23: Time.deltaTime은 timeScale=0 일시정지 시 멈추고, 앱 백그라운드 복귀 시
-            // 첫 프레임 deltaTime이 매우 커져 타이머가 즉시 만료될 수 있음.
-            // 부활 카운트다운은 실시간 기반이어야 하므로 unscaledDeltaTime 사용.
-            float dt = Time.unscaledDeltaTime;
-            // 너무 큰 dt(백그라운드 복귀 직후)는 서버와 desync 방지를 위해 0.1s로 클램프
-            if (dt > 0.1f) dt = 0.1f;
-            refreshAccum += dt;
-            if (refreshAccum >= refreshInterval)
-            {
-                refreshAccum = 0f;
-                UpdateReviveInfoText();
-            }
-
-            yield return null;
-            timer -= dt;
-        }
-        // 5초 만료 → 서버 타임아웃 코루틴이 킬 처리, UI만 닫음
-        HideReviveUI();
-    }
-
-    private void OnReviveClicked()
-    {
-        if (pendingReviveSync != null)
-            pendingReviveSync.RequestReviveServerRpc();
-        HideReviveUI();
-    }
-
-    private void OnGiveUpClicked()
-    {
-        if (pendingReviveSync != null)
-            pendingReviveSync.RequestGiveUpServerRpc();
-        HideReviveUI();
-    }
-
-    public void HideReviveUI()
-    {
-        if (reviveCountdownRoutine != null)
-        {
-            StopCoroutine(reviveCountdownRoutine);
-            reviveCountdownRoutine = null;
-        }
-        if (revivePanel != null) revivePanel.SetActive(false);
-        pendingReviveSync = null;
-    }
-
-    // ════════════════════════════════════════════════════════════
-    //  매치 중도 포기(Surrender) UI
-    //
-    //  PlayerController 에서 Back 키 / Esc 키 / Android Back 이벤트로 호출.
-    //  실시간 멀티플레이이므로 게임 시간/네트워크는 그대로 흐른다.
-    // ════════════════════════════════════════════════════════════
-
-    /// <summary>현재 surrender 확인 패널이 표시 중인지 여부.</summary>
-    public bool IsSurrenderConfirmShown =>
-        surrenderConfirmPanel != null && surrenderConfirmPanel.activeInHierarchy;
-
-    /// <summary>
-    /// 포기 확인 팝업을 표시합니다. 부활창이 떠 있거나 게임이 이미 끝났다면 무시.
-    /// </summary>
-    public void ShowSurrenderConfirm()
-    {
-        if (surrenderConfirmPanel == null) return;
-
-        // 이미 표시 중이면 중복 호출 무시.
-        if (surrenderConfirmPanel.activeSelf) return;
-
-        // 게임이 아직 시작 전이거나, 종료 단계(결과 배너 / 씬 전환 대기)이면 띄우지 않음.
-        var mgr = InGameManager.Instance;
-        if (mgr != null && (!mgr.isGameActive || mgr.IsGameEnded)) return;
-
-        // 부활 패널이 열려있으면 그쪽이 우선 — surrender 대신 부활/포기 선택을 사용.
-        if (revivePanel != null && revivePanel.activeSelf) return;
-
-        // 로컬 플레이어가 이미 사망 상태이면 surrender 불필요(이미 관전 모드).
-        if (localPlayer != null && localPlayer.IsDead) return;
-
-        surrenderConfirmPanel.SetActive(true);
-
-        if (surrenderConfirmButton != null)
-        {
-            surrenderConfirmButton.onClick.RemoveAllListeners();
-            surrenderConfirmButton.onClick.AddListener(OnSurrenderConfirmed);
-        }
-        if (surrenderCancelButton != null)
-        {
-            surrenderCancelButton.onClick.RemoveAllListeners();
-            surrenderCancelButton.onClick.AddListener(HideSurrenderConfirm);
-        }
-    }
-
-    public void HideSurrenderConfirm()
-    {
-        if (surrenderConfirmPanel != null) surrenderConfirmPanel.SetActive(false);
-    }
-
-    private void OnSurrenderConfirmed()
-    {
-        // 1회만 동작하도록 즉시 버튼 비활성화 (RPC 응답 대기 중 중복 클릭 차단).
-        if (surrenderConfirmButton != null) surrenderConfirmButton.interactable = false;
-        if (surrenderCancelButton  != null) surrenderCancelButton.interactable  = false;
-
-        // 로컬 플레이어 → 자신의 PlayerNetworkSync.RequestSurrenderServerRpc 호출.
-        if (localPlayer != null && localPlayer.networkSync != null
-            && localPlayer.networkSync.IsSpawned)
-        {
-            localPlayer.networkSync.RequestSurrenderServerRpc();
-        }
-
-        // 패널은 즉시 닫음 (사망 처리 후 관전 모드 진입은 기존 흐름 그대로 동작).
-        HideSurrenderConfirm();
-
-        // 다음 매치를 위해 interactable 복구.
-        if (surrenderConfirmButton != null) surrenderConfirmButton.interactable = true;
-        if (surrenderCancelButton  != null) surrenderCancelButton.interactable  = true;
-    }
-
-    // ════════════════════════════════════════════════════════════
-    //  스킬 이름 (40종 전체)
-    // ════════════════════════════════════════════════════════════
-
-    private static string GetSkillShortName(ActiveSkillType skill) => skill switch
-    {
-        ActiveSkillType.Sweep            => "휩쓸기",
-        ActiveSkillType.ChargeStrike     => "돌진강타",
-        ActiveSkillType.DefenseStance    => "방어태세",
-        ActiveSkillType.EarthquakeStrike => "지진강타",
-        ActiveSkillType.ShieldBash       => "방패강타",
-        ActiveSkillType.Shockwave        => "지진파",
-        ActiveSkillType.IronSkin         => "강철피부",
-        ActiveSkillType.Bulldozer        => "불도저",
-        ActiveSkillType.HolyStrike       => "신성타격",
-        ActiveSkillType.JudgmentHammer   => "심판망치",
-        ActiveSkillType.DivineGrace      => "신의가호",
-        ActiveSkillType.PillarOfJudgment => "심판기둥",
-        ActiveSkillType.RuthlessStrike   => "무자비",
-        ActiveSkillType.BleedSlash       => "출혈베기",
-        ActiveSkillType.UndyingRage      => "불굴분노",
-        ActiveSkillType.BladeStorm       => "칼날폭풍",
-        ActiveSkillType.Fireball         => "화염구",
-        ActiveSkillType.IceShards        => "얼음파편",
-        ActiveSkillType.IceShield        => "얼음방패",
-        ActiveSkillType.Meteor           => "메테오",
-        ActiveSkillType.PierceArrow      => "관통화살",
-        ActiveSkillType.MultiShot        => "다중사격",
-        ActiveSkillType.Trap             => "덫놓기",
-        ActiveSkillType.ArrowRain        => "화살폭우",
-        ActiveSkillType.Smite            => "징벌",
-        ActiveSkillType.HolyExplosion    => "신성폭발",
-        ActiveSkillType.HealingLight     => "치유빛",
-        ActiveSkillType.GuardianAngel    => "수호천사",
-        ActiveSkillType.PoisonDagger     => "독단검",
-        ActiveSkillType.Ambush           => "기습",
-        ActiveSkillType.SmokeBomb        => "연막탄",
-        ActiveSkillType.ShadowRaid       => "그림자습격",
-        ActiveSkillType.VitalStrike      => "급소찌르기",
-        ActiveSkillType.Shuriken         => "표창",
-        ActiveSkillType.StealthSkill     => "은신",
-        ActiveSkillType.DeathMark        => "죽음표식",
-        ActiveSkillType.FryingPan        => "프라이팬",
-        ActiveSkillType.BurningOil       => "불타는기름",
-        ActiveSkillType.SnackTime        => "간식타임",
-        ActiveSkillType.FeastTime        => "만찬시간",
-        _                                => skill.ToString()
-    };
 }

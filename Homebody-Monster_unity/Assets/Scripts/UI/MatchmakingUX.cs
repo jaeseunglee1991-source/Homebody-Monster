@@ -232,7 +232,8 @@ public class MatchmakingUX : MonoBehaviour
                 while (Time.time < deadline && untrackTask != null && !untrackTask.IsCompleted)
                     yield return null;
             }
-            AppNetworkManager.Instance?.ConnectToGameServer(ip, port);
+            // [Pass C] NGO ConnectToGameServer 제거 — Fusion 매칭은 MatchmakingManager.StartFusionMatch가 담당.
+            _ = port; // 미사용 경고 억제(레거시 포트)
         }
         else
             Debug.LogError("[MatchmakingUX] 게임 서버 IP를 알 수 없어 접속 불가.");

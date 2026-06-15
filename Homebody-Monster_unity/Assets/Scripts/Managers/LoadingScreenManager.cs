@@ -87,15 +87,7 @@ public class LoadingScreenManager : MonoBehaviour
     /// </summary>
     public static void LoadSceneAsync(string sceneName)
     {
-        // NGO가 활성 중이면 서버가 씬 전환을 주도하므로 개입하지 않음
-        var netMgr = Unity.Netcode.NetworkManager.Singleton;
-        if (netMgr != null && netMgr.IsListening)
-        {
-            Debug.LogWarning($"[LoadingScreen] NGO 활성 중 직접 씬 전환: {sceneName}. 동기 로드로 폴백.");
-            SceneManager.LoadScene(sceneName);
-            return;
-        }
-
+        // [Pass C] NGO 활성 체크 제거 — Fusion은 자체 씬 매니저 사용. 로딩 화면을 직접 진행.
         _pendingScene = sceneName;
 
         // LoadingScene이 Build Settings에 등록되어 있는지 씬 이름 비교로 확인

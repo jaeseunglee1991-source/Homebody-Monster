@@ -1,0 +1,6 @@
+[DEFAULT]
+user=ocid1.user.oc1..aaaaaaaadxs4u5kualzy7iqveppmxvmcrfhssmcf5ow27etnjjom552f3apq
+fingerprint=33:de:1e:d5:49:26:ab:0f:da:c7:4b:72:da:a0:96:c0
+key_file=C:\Users\ÀÌÀç½Â\.oci\oci_api_key.pem
+tenancy=ocid1.tenancy.oc1..aaaaaaaacgqvu547so67h3x4twosjaz6a4o7qrp73f4ssbioftebjiygfluq
+region=ap-osaka-1

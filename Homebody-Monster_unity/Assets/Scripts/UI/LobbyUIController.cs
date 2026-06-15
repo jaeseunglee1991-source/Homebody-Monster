@@ -118,7 +118,7 @@ public class LobbyUIController : MonoBehaviour
         {
             AppNetworkManager.Instance.OnPlayerPresenceUpdated += UpdatePlayerListDetail;
             AppNetworkManager.Instance.OnChatReceived          += UpdateChatUI;
-            AppNetworkManager.Instance.OnClientDisconnected    += HandleServerDisconnected;
+            // [Pass C] OnClientDisconnected(NGO) 제거 — Fusion 이탈은 NetMatch/PoCNetworkCallbacks가 로비 복귀 처리.
             // 채팅 채널 구독 완료 이벤트 — 완료 전까지 전송 버튼 비활성화
             AppNetworkManager.Instance.OnLobbyChatReady        += HandleLobbyChatReady;
             AppNetworkManager.Instance.ConnectToLobby();
@@ -336,7 +336,6 @@ public class LobbyUIController : MonoBehaviour
         {
             AppNetworkManager.Instance.OnPlayerPresenceUpdated -= UpdatePlayerListDetail;
             AppNetworkManager.Instance.OnChatReceived          -= UpdateChatUI;
-            AppNetworkManager.Instance.OnClientDisconnected    -= HandleServerDisconnected;
             AppNetworkManager.Instance.OnLobbyChatReady        -= HandleLobbyChatReady;
 
             // Supabase Realtime 채팅 채널 구독 해제 (로비 전용이므로 씬 이탈 시 정리)
@@ -511,21 +510,8 @@ public class LobbyUIController : MonoBehaviour
             onlineCountText.text = $"현재 접속자: {count}명";
     }
 
-    // [FIX] OnClientDisconnected 핸들러 추가.
-    // 인게임 서버와 연결이 끊어졌을 때 호출됩니다.
-    // 정상 게임 종료(ResultController가 NGO 정리) 시에는 호출되지 않고,
-    // 비정상 연결 해제(서버 다운, 네트워크 끊김)일 때만 호출됩니다.
-    // 인게임 중 재접속 시도는 ReconnectManager가 먼저 처리하며,
-    // 재접속 실패 후 로비로 복귀했을 때 이 핸들러가 안내 메시지를 표시합니다.
-    private void HandleServerDisconnected(string reason)
-    {
-        Debug.LogWarning($"[LobbyUIController] 서버 연결 해제: {reason}");
-        // 채팅으로 안내 (이미 로비 씬에 있는 경우)
-        UpdateChatUI($"[시스템]: 서버 연결이 끊어졌습니다. ({reason})");
-        // 매칭 탐색 중이었다면 큐 정리
-        if (MatchmakingManager.Instance != null && MatchmakingManager.Instance.IsSearching)
-            MatchmakingManager.Instance.CancelSearch();
-    }
+    // [Pass C] HandleServerDisconnected 제거 — NGO OnClientDisconnected(삭제됨) 전용 핸들러였음.
+    // Fusion 이탈은 NetMatch/PoCNetworkCallbacks가 로비 복귀를 중앙 처리한다.
 
     /// <summary>
     /// 상세 닉네임 목록이 필요한 경우(예: Supabase Presence 연동 후) 이 메서드를 호출합니다.

@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using Unity.Netcode;
 using UnityEngine;
 
 public enum JobType { Warrior, Tanker, Paladin, Berserker, Mage, Archer, Priest, Rogue, Assassin, Chef }
@@ -116,21 +115,13 @@ public class CharacterData
     public bool HasActive(ActiveSkillType a)   => activeSkills.Contains(a);
 }
 
-public struct DamageResult : INetworkSerializable
+// [Pass C] INetworkSerializable 제거 — DamageResult는 호스트에서 계산·로컬 사용만 하므로
+// 네트워크 직렬화 불필요(NGO 전용이었음).
+public struct DamageResult
 {
     public float finalDamage;
     public bool  isEvaded, isCritical, isWorldCollapse, isShielded;
     public bool  isGiantKill, isGuarded, isLuckyStrike, isExecutioner, isDivineGraceBlocked;
-
-    public void NetworkSerialize<T>(BufferSerializer<T> s) where T : IReaderWriter
-    {
-        s.SerializeValue(ref finalDamage);
-        s.SerializeValue(ref isEvaded);         s.SerializeValue(ref isCritical);
-        s.SerializeValue(ref isDivineGraceBlocked); s.SerializeValue(ref isWorldCollapse);
-        s.SerializeValue(ref isLuckyStrike);    s.SerializeValue(ref isGiantKill);
-        s.SerializeValue(ref isExecutioner);    s.SerializeValue(ref isShielded);
-        s.SerializeValue(ref isGuarded);
-    }
 }
 
 public static class ListExtensions

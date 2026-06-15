@@ -67,13 +67,8 @@ public static class StatCalculator
 
     public static CharacterData GenerateRandomCharacter(string name) => GenerateCharacter(name);
 
-    public static float GetEffectiveMoveSpeed(CharacterData data, StatusEffectSystem statusFX)
-    {
-        float speed = data.moveSpeed;
-        if (data.HasPassive(PassiveSkillType.Swiftness)) speed *= 1.1f;
-        if (statusFX != null) speed *= statusFX.GetMoveSpeedMultiplier();
-        return Mathf.Max(0f, speed);
-    }
+    // [Pass C] GetEffectiveMoveSpeed(CharacterData, StatusEffectSystem)는 NGO PlayerController 전용이라
+    // 제거. Fusion은 NetPlayer가 _data.moveSpeed × NetStatus.MoveSpeedMultiplier로 직접 계산한다.
 
     public static float ModifySlowDuration(CharacterData target, float duration)
     {

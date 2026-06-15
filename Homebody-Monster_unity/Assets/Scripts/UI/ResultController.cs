@@ -511,22 +511,7 @@ public class ResultController : MonoBehaviour
     /// </summary>
     private void CleanupNetcodeConnection()
     {
-        var netMgr = Unity.Netcode.NetworkManager.Singleton;
-        if (netMgr == null || !netMgr.IsListening) return;
-
-        // [Fix] 데디케이티드 서버(IsServer && !IsHost)는 Shutdown 생략.
-        // 로컬 테스트 환경에서는 클라이언트+서버가 같은 프로세스라
-        // 여기서 Shutdown 하면 서버까지 함께 내려가 2회차 매칭 시
-        // 씬 전환 자체가 불가능해진다. 출시(분리 서버)에서는 결과 씬이
-        // 클라이언트 프로세스에서만 뜨므로 이 분기에 들어올 일이 없다.
-        if (netMgr.IsServer && !netMgr.IsHost)
-        {
-            Debug.Log("[ResultController] 데디케이티드 서버 감지 → NGO Shutdown 생략");
-            return;
-        }
-
-        Debug.Log("[ResultController] NGO 연결 종료 (결과 씬 진입)");
-        netMgr.Shutdown();
+        // [Pass C] NGO 연결 정리 불필요 — Fusion은 Runner.Shutdown을 NetMatch/PoCNetworkCallbacks가 처리.
     }
 
     // ════════════════════════════════════════════════════════════

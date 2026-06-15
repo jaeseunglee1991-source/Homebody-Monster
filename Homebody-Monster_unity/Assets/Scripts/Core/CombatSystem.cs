@@ -6,7 +6,7 @@ public class CombatSystem : MonoBehaviour
 
     /// <summary>기본 평타 데미지 계산.</summary>
     public static DamageResult CalculateDamage(CharacterData attacker, CharacterData defender,
-        StatusEffectSystem attackerFX, StatusEffectSystem defenderFX)
+        ICombatStatus attackerFX, ICombatStatus defenderFX)
         => CalculateDamageWithOverride(attacker, defender, attacker.baseAtk, attackerFX, defenderFX);
 
     /// <summary>
@@ -14,7 +14,7 @@ public class CombatSystem : MonoBehaviour
     /// overrideDamage를 baseAtk 대신 출발점으로 사용합니다.
     /// </summary>
     public static DamageResult CalculateDamageWithOverride(CharacterData attacker, CharacterData defender,
-        float overrideDamage, StatusEffectSystem attackerFX, StatusEffectSystem defenderFX)
+        float overrideDamage, ICombatStatus attackerFX, ICombatStatus defenderFX)
     {
         var   result = new DamageResult();
         float dmg    = overrideDamage;
@@ -124,7 +124,7 @@ public class CombatSystem : MonoBehaviour
     }
 
     public static void PostDamageEffects(CharacterData attacker, CharacterData defender,
-        StatusEffectSystem attackerFX, StatusEffectSystem defenderFX, float dealtDamage)
+        ICombatStatus attackerFX, ICombatStatus defenderFX, float dealtDamage)
     {
         if (dealtDamage <= 0f) return;
         var cfg = Cfg;
@@ -164,25 +164,8 @@ public class CombatSystem : MonoBehaviour
         return Mathf.Max(thornsMin, dealtDamage * thornsRate);
     }
 
-    /// <summary>불굴 패시브: 즉사 방지</summary>
-    public static bool TryTenacity(CharacterData defender, StatusEffectSystem defenderFX)
-    {
-        if (defender.tenacityUsed) return false;
-        if (!defender.HasPassive(PassiveSkillType.Tenacity)) return false;
-        defender.tenacityUsed = true;
-        defender.currentHp    = 1f;
-        defenderFX.ApplyEffect(StatusEffectType.TenacityShield, 1.5f);
-        return true;
-    }
-
-    /// <summary>수호 천사 궁극기: 즉사 방지</summary>
-    public static bool TryGuardianAngel(CharacterData defender, StatusEffectSystem defenderFX)
-    {
-        if (!defenderFX.HasGuardianAngel) return false;
-        defender.currentHp = defender.maxHp * 0.3f;
-        defenderFX.RemoveEffect(StatusEffectType.GuardianAngel);
-        return true;
-    }
+    // [Pass C] TryTenacity/TryGuardianAngel(StatusEffectSystem 인자)는 NGO 사망 파이프라인 전용이라
+    // 제거됨. Fusion은 NetStatus.ConsumeGuardianAngel(NetPlayer.ReceiveDamage)로 소생을 처리한다.
 
     /// <summary>재생 패시브: 비전투 시 HP 회복 (GameBalanceConfig 연동)</summary>
     public static System.Collections.IEnumerator RegenerationRoutine(
